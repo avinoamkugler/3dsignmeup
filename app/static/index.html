@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>3dSignMeUp</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='6' width='20' height='20' rx='4' transform='rotate(45 16 16)' fill='%235b8cff'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/styles.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/static/vendor/three.module.js",
+        "three/addons/": "/static/vendor/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">◆</span>
+        <span class="brand-name">3dSignMeUp</span>
+      </div>
+      <nav class="stepper" id="stepper" aria-label="Progress">
+        <button class="step" data-step="1" type="button"><span class="step-num">1</span><span class="step-label">Upload</span></button>
+        <span class="step-sep">→</span>
+        <button class="step" data-step="2" type="button"><span class="step-num">2</span><span class="step-label">Clean</span></button>
+        <span class="step-sep">→</span>
+        <button class="step" data-step="3" type="button"><span class="step-num">3</span><span class="step-label">Extrude</span></button>
+        <span class="step-sep">→</span>
+        <button class="step" data-step="4" type="button"><span class="step-num">4</span><span class="step-label">Download</span></button>
+      </nav>
+    </header>
+
+    <main class="screens">
+      <!-- ============ SCREEN 1: UPLOAD ============ -->
+      <section class="screen" id="screen-1" hidden>
+        <div class="screen-inner narrow">
+          <h1 class="screen-title">Upload an image</h1>
+          <p class="screen-sub">Drop a PNG, JPG, WEBP, BMP or GIF. We'll detect its colors and turn it into a printable sign.</p>
+
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload image">
+            <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" hidden />
+            <div class="dropzone-empty" id="dropzone-empty">
+              <div class="dz-icon">⬆</div>
+              <div class="dz-title">Drag &amp; drop your image</div>
+              <div class="dz-sub">or <span class="link">browse files</span></div>
+            </div>
+            <div class="dropzone-preview" id="dropzone-preview" hidden>
+              <img id="upload-thumb" alt="Uploaded preview" />
+              <div class="upload-meta" id="upload-meta"></div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <span></span>
+            <button class="btn btn-primary" id="upload-next" type="button" disabled>Continue →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SCREEN 2: PALETTE & CLEANUP ============ -->
+      <section class="screen" id="screen-2" hidden>
+        <div class="screen-inner">
+          <h1 class="screen-title">Clean &amp; palette</h1>
+          <p class="screen-sub">Tune the palette and cleanup. The preview updates live.</p>
+
+          <div class="split">
+            <div class="controls" id="clean-controls">
+              <div class="field">
+                <label for="target-width">Sign width (mm)</label>
+                <input type="number" id="target-width" min="1" max="1000" step="1" value="120" />
+              </div>
+
+              <div class="field">
+                <label>Number of colors</label>
+                <div class="stepper-input">
+                  <button type="button" class="step-btn" id="ncolors-dec" aria-label="Fewer colors">−</button>
+                  <span class="stepper-value" id="ncolors-value">3</span>
+                  <button type="button" class="step-btn" id="ncolors-inc" aria-label="More colors">+</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <label>Palette</label>
+                <div class="swatches" id="palette-swatches"></div>
+                <div class="palette-tools">
+                  <label class="checkbox">
+                    <input type="checkbox" id="color-lock" checked />
+                    <span>Keep original color mapping</span>
+                  </label>
+                  <button type="button" class="btn-link" id="reset-colors">Reset colors</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="smoothness">Smoothness <span class="val" id="smoothness-val">4</span></label>
+                <input type="range" id="smoothness" min="0" max="10" step="1" value="4" />
+              </div>
+
+              <div class="field">
+                <label for="min-feature">Min feature (mm)</label>
+                <input type="number" id="min-feature" min="0.1" step="0.1" value="0.5" />
+              </div>
+
+              <div class="field checkbox-field">
+                <label class="checkbox">
+                  <input type="checkbox" id="clear-bg" checked />
+                  <span>Clear background</span>
+                </label>
+              </div>
+
+              <div class="field" id="enclosed-field">
+                <label for="enclosed-bg">Enclosed background</label>
+                <select id="enclosed-bg">
+                  <option value="through_hole">Through hole</option>
+                  <option value="plate" selected>Hole in art (plate below)</option>
+                  <option value="fill">Fill (main body)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="preview-pane">
+              <div class="preview-toolbar">
+                <label class="checkbox">
+                  <input type="checkbox" id="thin-toggle" />
+                  <span>Highlight thin features</span>
+                </label>
+                <div class="spinner" id="preview-spinner" hidden><span class="spin"></span> Processing…</div>
+              </div>
+
+              <div class="preview-stage checker" id="preview-stage">
+                <img id="preview-img" alt="Cleaned preview" hidden />
+                <img id="thin-overlay" class="overlay" alt="Thin feature overlay" hidden />
+                <div class="preview-placeholder" id="preview-placeholder">Preview will appear here</div>
+              </div>
+              <div class="thin-note" id="thin-note" hidden></div>
+
+              <div class="info-row">
+                <div class="info-islands" id="info-islands"></div>
+                <div class="coverage" id="coverage"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-ghost" id="clean-back" type="button">← Back</button>
+            <button class="btn btn-primary" id="clean-approve" type="button" disabled>Approve →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SCREEN 3: EXTRUSION ============ -->
+      <section class="screen" id="screen-3" hidden>
+        <div class="screen-inner">
+          <h1 class="screen-title">Extrusion</h1>
+          <p class="screen-sub">Set heights, color strategy and finishing.</p>
+
+          <div id="model-warnings" class="warning-banners"></div>
+
+          <div class="split extrude-split">
+            <div class="controls-grid">
+              <div class="field">
+                <label>Color mode</label>
+                <div class="toggle-group" id="mode-toggle">
+                  <button type="button" class="toggle-btn" data-mode="ams">AMS</button>
+                  <button type="button" class="toggle-btn active" data-mode="swap">Swap</button>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="layer-height">Layer height (mm)</label>
+                <input type="number" id="layer-height" min="0.01" step="0.01" value="0.2" />
+              </div>
+              <div class="field">
+                <label for="first-layer-height">First layer height (mm)</label>
+                <input type="number" id="first-layer-height" min="0.01" step="0.01" value="0.2" />
+              </div>
+
+              <div class="field span-all">
+                <label>Per-color heights</label>
+                <div class="color-heights" id="color-heights"></div>
+              </div>
+
+              <div class="field span-all">
+                <label id="body-color-label">Main body color</label>
+                <div id="main-body-color" class="body-swatches" role="radiogroup" aria-labelledby="body-color-label"></div>
+              </div>
+
+              <div class="field checkbox-field">
+                <label class="checkbox">
+                  <input type="checkbox" id="plate-enabled" checked />
+                  <span>Backing plate</span>
+                </label>
+                <input type="number" id="plate-thickness" min="0.01" step="0.1" value="1.2" title="Plate thickness (mm)" />
+              </div>
+
+              <div class="field checkbox-field">
+                <label class="checkbox">
+                  <input type="checkbox" id="chamfer-enabled" checked />
+                  <span>Chamfer</span>
+                </label>
+                <input type="number" id="chamfer-size" min="0.01" step="0.1" value="0.6" title="Chamfer size (mm)" />
+              </div>
+
+              <div class="field" id="lead-field">
+                <label for="initial-lead">Initial color switch lead (mm)</label>
+                <input type="number" id="initial-lead" min="0" step="0.1" value="2.0" />
+              </div>
+
+              <div class="field span-all">
+                <label>Hanging</label>
+                <div class="toggle-group" id="hang-toggle">
+                  <button type="button" class="toggle-btn active" data-hang="none">None</button>
+                  <button type="button" class="toggle-btn" data-hang="keyhole">Keyhole slots</button>
+                  <button type="button" class="toggle-btn" data-hang="fins">Kickstand fins</button>
+                </div>
+              </div>
+
+              <div class="field span-all" id="fin-angle-field" hidden>
+                <label for="fin-angle">Lean angle (° from vertical) <span class="val" id="fin-angle-val">15</span></label>
+                <input type="range" id="fin-angle" min="0" max="45" step="1" value="15" />
+              </div>
+            </div>
+
+            <aside class="extrude-visual">
+              <div class="ev-block">
+                <div class="ev-label">Cleaned art</div>
+                <div class="ev-image checker">
+                  <img id="extrude-preview-img" alt="Cleaned art preview" />
+                </div>
+              </div>
+              <div class="ev-block">
+                <div class="ev-label">Filament by height</div>
+                <div class="fbar-headline" id="fbar-headline"></div>
+                <div class="fbar-note amber-note" id="fbar-note" hidden></div>
+                <div class="fbar-wrap">
+                  <div class="fbar" id="fbar"></div>
+                  <div class="fbar-scale" id="fbar-scale"></div>
+                </div>
+              </div>
+            </aside>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-ghost" id="extrude-back" type="button">← Back</button>
+            <button class="btn btn-primary" id="extrude-build" type="button">Build model →</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ SCREEN 4: REVIEW & DOWNLOAD ============ -->
+      <section class="screen" id="screen-4" hidden>
+        <div class="screen-inner">
+          <h1 class="screen-title">Review &amp; download</h1>
+          <p class="screen-sub">Inspect the model, then download for Bambu Studio.</p>
+
+          <div class="split">
+            <div class="viewer-pane">
+              <div class="viewer" id="viewer">
+                <div class="viewer-loading" id="viewer-loading"><span class="spin"></span> Loading 3D…</div>
+              </div>
+              <div class="download-row">
+                <a class="btn btn-primary" id="dl-3mf" download>⬇ sign.3mf</a>
+                <a class="btn btn-secondary" id="dl-png" download>⬇ clean.png</a>
+              </div>
+            </div>
+
+            <div class="review-side">
+              <div id="review-warnings" class="warning-banners"></div>
+
+              <div class="review-block">
+                <h3>Swap plan <span class="pill" id="nswaps-pill"></span></h3>
+                <div id="swap-plan-wrap"></div>
+              </div>
+
+              <div class="review-block">
+                <h3>Snapped heights</h3>
+                <div id="snapped-wrap"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button class="btn btn-ghost" id="review-back" type="button">← Back</button>
+            <button class="btn btn-secondary" id="review-restart" type="button">Start over</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="toast-stack" id="toast-stack"></div>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

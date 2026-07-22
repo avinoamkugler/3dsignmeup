@@ -1,0 +1,33 @@
+[project]
+name = "3dsignmeup"
+version = "0.1.0"
+description = "Image -> multicolor 3D-printable sign (3MF) for Bambu A1 mini"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "numpy>=1.26,<3",
+    "pillow>=10",
+    "opencv-python-headless>=4.9",
+    "scikit-image>=0.23",
+    "scikit-learn>=1.4",
+    "scipy>=1.11",
+    "shapely>=2.0",
+    "trimesh>=4.4",
+    "mapbox-earcut>=1.0",
+    "networkx>=3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "httpx>=0.27",
+    "lxml>=5",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

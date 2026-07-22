@@ -1,0 +1,221 @@
+"""Deterministic label-grid cleanup (FR-3..FR-7).
+
+Single entry point:
+
+run_cleanup(labels, palette, *, mm_per_px, smoothness, min_feature_mm,
+            clear_background, enclosed_background) -> CleanupResult
+
+Fixed processing order (from the design doc):
+1. Smoothness: mode filtering on the label grid, kernel size scaled by
+   smoothness x mm-scale (resolution independent); smoothness=0 is a no-op.
+2. Island removal: connected components with area < min_feature_mm^2 are
+   reassigned to their dominant surrounding label.
+3. Background clear (if clear_background): sample the four corner labels;
+   flood-fill every same-label region 4-connected to any corner -> TRANSPARENT.
+   Originally-transparent pixels also count as corner-reachable background.
+4. Enclosed background resolution (only when clear_background).
+5. Thin-feature scan (detection only).
+
+Spatial parameters scale by mm_per_px so results are resolution independent.
+
+Implementation choices documented inline:
+- Smoothing is a true per-label majority (mode) vote via box-filter counts,
+  argmax across categories (TRANSPARENT is its own category). Never produces a
+  non-existing label.
+- Island removal segments the grid into homogeneous connected components in one
+  skimage.measure.label pass (4-connectivity), then reassigns every pixel of a
+  sub-threshold component to the label of its nearest surviving pixel
+  (Euclidean distance-transform fill). This is a vectorized equivalent of
+  "dominant surrounding label" for tiny regions. Iterated up to 3 passes.
+"""
+from __future__ import annotations
+
+import cv2
+import numpy as np
+from scipy import ndimage
+from skimage.measure import label as cc_label
+
+from app.core.types import (
+    CleanupResult,
+    HOLE_PLATE,
+    Labels,
+    TRANSPARENT,
+    hex_to_rgb,  # noqa: F401  (kept for parity; unused directly)
+)
+
+_MAX_ISLAND_PASSES = 3
+
+
+def _smooth(labels: Labels, radius: int) -> Labels:
+    """Categorical majority filter over a (2r+1) window; TRANSPARENT is a
+    category. Ties resolved toward the lower label value (deterministic)."""
+    if radius < 1:
+        return labels
+    k = 2 * radius + 1
+    uniq = np.unique(labels)
+    best_count = np.zeros(labels.shape, dtype=np.float32)
+    best_label = np.full(labels.shape, uniq[0], dtype=labels.dtype)
+    for v in uniq:
+        m = (labels == v).astype(np.float32)
+        c = cv2.boxFilter(
+            m, ddepth=-1, ksize=(k, k),
+            normalize=False, borderType=cv2.BORDER_REPLICATE,
+        )
+        upd = c > best_count
+        best_label[upd] = v
+        best_count[upd] = c[upd]
+    return best_label
+
+
+def _remove_islands(labels: Labels, min_area_px: float) -> Labels:
+    """Reassign sub-threshold homogeneous components to their nearest
+    surviving pixel's label. Iterates until stable or 3 passes."""
+    if min_area_px <= 1:
+        return labels
+    out = labels.copy()
+    bg = int(out.min()) - 1  # a value not present, so every pixel is labeled
+    for _ in range(_MAX_ISLAND_PASSES):
+        cc = cc_label(out, background=bg, connectivity=1)
+        areas = np.bincount(cc.ravel())
+        small_ids = np.nonzero(areas < min_area_px)[0]
+        # id 0 only appears for pixels == bg (none here); guard anyway
+        small_ids = small_ids[small_ids != 0]
+        if small_ids.size == 0:
+            break
+        small_mask = np.isin(cc, small_ids)
+        if small_mask.all():
+            break
+        # nearest surviving pixel for every small pixel
+        _, (iy, ix) = ndimage.distance_transform_edt(
+            small_mask, return_indices=True
+        )
+        out = out[iy, ix]
+    return out
+
+
+def _background_clear(labels: Labels) -> tuple[Labels, set[int]]:
+    """Flood TRANSPARENT from the four corners over cells that are either
+    already TRANSPARENT or hold a corner label. Returns cleared grid and the
+    set of palette labels sampled at the corners (the "background" colors)."""
+    h, w = labels.shape
+    corners = [(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)]
+    corner_labels = {int(labels[r, c]) for (r, c) in corners}
+    palette_bg = {v for v in corner_labels if v >= 0}
+
+    passable = (labels == TRANSPARENT)
+    for v in palette_bg:
+        passable |= (labels == v)
+
+    comp = cc_label(passable, background=0, connectivity=1)
+    seed_ids = {int(comp[r, c]) for (r, c) in corners if passable[r, c]}
+    seed_ids.discard(0)
+    if seed_ids:
+        reached = np.isin(comp, list(seed_ids))
+        out = labels.copy()
+        out[reached] = TRANSPARENT
+    else:
+        out = labels.copy()
+    return out, palette_bg
+
+
+def _thin_mask(labels: Labels, n_colors: int, radius: int) -> np.ndarray | None:
+    """Morphological opening residual per palette color -> thin mask."""
+    if radius < 1:
+        return None
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+    )
+    thin = np.zeros(labels.shape, dtype=bool)
+    for i in range(n_colors):
+        m = (labels == i).astype(np.uint8)
+        if not m.any():
+            continue
+        opened = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)
+        thin |= (m > 0) & (opened == 0)
+    return thin if thin.any() else None
+
+
+def run_cleanup(
+    labels: Labels,
+    palette: list[str],
+    *,
+    mm_per_px: float,
+    smoothness: int,
+    min_feature_mm: float,
+    clear_background: bool,
+    enclosed_background: str,
+) -> CleanupResult:
+    n = len(palette)
+    labels = np.asarray(labels, dtype=np.int16).copy()
+
+    # 1. Smoothing (kernel radius ~ smoothness * 0.05mm, in px).
+    radius = int(round(smoothness * 0.05 / mm_per_px)) if smoothness > 0 else 0
+    labels = _smooth(labels, radius)
+
+    # 2. Island removal (area threshold in px^2).
+    min_area_px = (min_feature_mm / mm_per_px) ** 2
+    labels = _remove_islands(labels, min_area_px)
+
+    body_fill_mask = np.zeros(labels.shape, dtype=bool)
+
+    if clear_background:
+        # 3. Corner-connected background clear.
+        labels, palette_bg = _background_clear(labels)
+
+        # 4. Enclosed background: remaining pixels still holding a corner
+        #    (background) palette label are enclosed regions.
+        if palette_bg:
+            enclosed = np.isin(labels, list(palette_bg))
+            if enclosed.any():
+                if enclosed_background == "through_hole":
+                    labels[enclosed] = TRANSPARENT
+                elif enclosed_background == "plate":
+                    labels[enclosed] = HOLE_PLATE
+                elif enclosed_background == "fill":
+                    body_fill_mask = enclosed
+                else:
+                    raise ValueError(
+                        f"unknown enclosed_background: {enclosed_background!r}"
+                    )
+
+    # 5. Thin-feature scan (detection only, never mutates labels).
+    thin_radius = int(round(min_feature_mm / 2 / mm_per_px))
+    thin = _thin_mask(labels, n, thin_radius)
+
+    # islands: 8-connected components of artwork (label >= 0) after clearing.
+    art = labels >= 0
+    islands = int(cc_label(art, background=0, connectivity=2).max()) if art.any() else 0
+
+    # coverage: fraction of artwork (label >= 0) pixels per palette hex.
+    denom = int(art.sum())
+    coverage: dict[str, float] = {}
+    for i, hx in enumerate(palette):
+        cnt = int((labels == i).sum())
+        coverage[hx] = (cnt / denom) if denom > 0 else 0.0
+
+    return CleanupResult(
+        labels=labels,
+        body_fill_mask=body_fill_mask,
+        thin_mask=thin,
+        islands=islands,
+        coverage=coverage,
+    )
+
+
+def color_perimeters(labels: Labels, palette: list[str]) -> dict[str, float]:
+    """Boundary-pixel count per palette color: pixels of that color with at
+    least one 4-neighbor holding a different value (image edge counts). The
+    raster equivalent of geometry's per-region perimeter — used only to rank
+    "perimeter presence" for the equal-height sibling tiebreak, so the client
+    sidebar and the server swap plan agree on sibling ordering."""
+    padded = np.pad(labels, 1, constant_values=TRANSPARENT - 1)
+    diff = (
+        (padded[1:-1, 1:-1] != padded[:-2, 1:-1])
+        | (padded[1:-1, 1:-1] != padded[2:, 1:-1])
+        | (padded[1:-1, 1:-1] != padded[1:-1, :-2])
+        | (padded[1:-1, 1:-1] != padded[1:-1, 2:])
+    )
+    out: dict[str, float] = {}
+    for i, hx in enumerate(palette):
+        out[hx] = float(((labels == i) & diff).sum())
+    return out

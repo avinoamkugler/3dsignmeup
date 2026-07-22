@@ -1,0 +1,13 @@
+{
+  "name": "3dsignmeup-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Vendors three.js into app/static/vendor for the vanilla JS frontend",
+  "dependencies": {
+    "three": "^0.166.0"
+  },
+  "scripts": {
+    "vendor": "sh scripts/vendor.sh",
+    "postinstall": "sh scripts/vendor.sh"
+  }
+}
