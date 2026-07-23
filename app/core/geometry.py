@@ -91,7 +91,6 @@ def _extrude(geom, z0: float, z1: float) -> list:
 # --------------------------------------------------------------------------
 def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
     lh = extrude.layer_height_mm
-    flh = extrude.first_layer_height_mm
     body = extrude.main_body_color
     plate_enabled = extrude.plate.enabled
     mode = extrude.mode
@@ -112,7 +111,7 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
 
     plate_top = 0.0
     if plate_enabled:
-        plate_top, _ = snap_z(extrude.plate.thickness_mm, layer_height_mm=lh, first_layer_height_mm=flh)
+        plate_top, _ = snap_z(extrude.plate.thickness_mm, layer_height_mm=lh)
     base_z = plate_top
 
     nonflo = [c for c in visible if not c.first_layer_only]
@@ -126,21 +125,15 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
             plate_top=plate_top,
             plate_enabled=plate_enabled,
             layer_height_mm=lh,
-            first_layer_height_mm=flh,
         )
         tops[c.hex] = top
 
-    # Sibling groups: colors sharing a snapped top. Dominant = first in
-    # visible_ordered (highest perimeter).
-    grp_members: dict[float, list[str]] = defaultdict(list)
-    for c in visible_ordered:
-        if c.first_layer_only:
-            continue
-        grp_members[round(tops[c.hex], 6)].append(c.hex)
-    sibling_rank: dict[str, int] = {}
-    for _, hexes in grp_members.items():
-        for i, hexv in enumerate(hexes):
-            sibling_rank[hexv] = i
+    # Non-dominant equal-top colors and the Z-range they print in their own
+    # filament (authoritative from compute_plan, pre-merge band starts).
+    sibling_span_of: dict[str, tuple[float, float]] = {}
+    for span in plan.sibling_spans:
+        for hexv in span.hexes[1:]:
+            sibling_span_of[hexv] = (span.z0_mm, span.z1_mm)
 
     # Body top for body-fill and above-first-layer FLO material.
     if plate_enabled:
@@ -148,7 +141,7 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
     elif body in tops:
         body_top = tops[body]
     else:
-        body_top = flh
+        body_top = lh
 
     # Cap thickness for AMS.
     cap = 3 * lh
@@ -161,7 +154,7 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
 
     # --- model top (hoisted: hanging needs it) ----------------------------
     band_tops = [b.z1_mm for b in plan.bands] if mode == "swap" else []
-    model_top = max([plate_top, flh, body_top] + list(tops.values()) + band_tops + [0.0])
+    model_top = max([plate_top, lh, body_top] + list(tops.values()) + band_tops + [0.0])
 
     # --- wall-hanging hardware (keyhole / fins) ---------------------------
     hang_plan = hanging.plan_hangs(
@@ -182,7 +175,7 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
     size_layers = 0
     chamfer_outline = None
     if chamfer_on:
-        size, size_layers = snap_z(extrude.chamfer.size_mm, layer_height_mm=lh, first_layer_height_mm=flh)
+        size, size_layers = snap_z(extrude.chamfer.size_mm, layer_height_mm=lh)
         # snap_z reports layers incl. the first layer; chamfer spans size_layers
         # actual layers of height lh starting at bed.
         size_layers = max(1, round(size / lh))
@@ -203,7 +196,7 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
             chamfer_on = False
 
     # --- Z breakpoints -----------------------------------------------------
-    bps = {0.0, flh, plate_top, body_top, model_top}
+    bps = {0.0, lh, plate_top, body_top, model_top}
     bps |= set(tops.values())
     if mode == "ams":
         for c in nonflo:
@@ -214,6 +207,9 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
         for b in plan.bands:
             bps.add(b.z0_mm)
             bps.add(b.z1_mm)
+        for span in plan.sibling_spans:
+            bps.add(span.z0_mm)
+            bps.add(span.z1_mm)
     if chamfer_on:
         bps.add(size)
         for i in range(size_layers + 1):
@@ -247,9 +243,9 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
             if bodyfill is not None and not bodyfill.is_empty and z < body_top - _EPS:
                 solids.append(bodyfill)
             for hexv in flo_hexes:
-                if flh - _EPS <= z < body_top - _EPS:
+                if lh - _EPS <= z < body_top - _EPS:
                     solids.append(regions[hexv])
-        if z < flh - _EPS:
+        if z < lh - _EPS:
             for hexv in flo_hexes:
                 solids.append(regions[hexv])
 
@@ -274,27 +270,24 @@ def build_model(art: VectorizedArt, extrude: ExtrudeParams) -> BuiltModel:
             out.append((eff, color, key, name))
 
         # 1. first-layer-only colors show their own color in layer 1.
-        if z < flh - _EPS:
+        if z < lh - _EPS:
             for c in flo:
                 take(regions[c.hex], c.hex, ("first", c.hex), f"first_{c.hex}")
 
         # 2. swap-mode sibling colors (non-dominant) print their own color
-        #    across their whole band.
+        #    across their equal-top span (lead-aware z0 from the plan).
         if mode == "swap" and z >= base_z - _EPS:
             for c in nonflo:
-                if sibling_rank.get(c.hex, 0) == 0:
+                span = sibling_span_of.get(c.hex)
+                if span is None:
                     continue
-                t = tops[c.hex]
-                b = next(
-                    (bb for bb in plan.bands if abs(bb.z1_mm - t) < _EPS),
-                    band_of(0.5 * (base_z + t)),
-                )
-                if b.z0_mm - _EPS <= z < t - _EPS:
+                z0, z1 = span
+                if z0 - _EPS <= z < z1 - _EPS:
                     take(
                         regions[c.hex],
                         c.hex,
-                        ("band", c.hex, b.z0_mm, b.z1_mm),
-                        f"band_{c.hex}_z{_fz(b.z0_mm)}-{_fz(b.z1_mm)}",
+                        ("band", c.hex, z0, z1),
+                        f"band_{c.hex}_z{_fz(z0)}-{_fz(z1)}",
                     )
 
         # 3. AMS caps.

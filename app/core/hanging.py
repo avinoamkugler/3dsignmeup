@@ -70,53 +70,40 @@ hanger; measured from a reference STL rather than imported as a mesh)
 
 Real-world mechanism (why the numbers below are NOT arbitrary): you push a
 screw's head through the round "bulb" opening at the back surface, into a
-roomy relief pocket behind it; sliding the sign down moves the screw's
-SHANK into the narrower "slot" above the bulb's position while the HEAD,
-too wide for the slot, stays caught in the relief pocket below the now-
-narrower ceiling. Gravity holds it there. This means, in LOCAL footprint
-coordinates (+Y = up the sign), **the bulb must be at the TOP of the
-footprint and the slot must taper away going DOWN** — get this backwards
-and the hardware doesn't work (the sign falls off instead of hanging).
+roomy relief pocket behind it; sliding the sign DOWN moves the screw's
+SHANK UP into the narrower "slot" above the bulb while the HEAD, too wide
+for the slot, stays caught in the relief pocket. Gravity holds it there.
+In LOCAL footprint coordinates (+Y = up the sign), **the bulb must be at
+the BOTTOM of the footprint and the slot must taper upward** — get this
+backwards and the hardware doesn't work (the sign falls off instead of
+hanging).
 
-Two stacked layers, cut from the back surface (Z=0) upward:
+Sized for a common #6 pan-head screw / small picture nail (~6.5–7mm head,
+~3.5mm shank, ~2–2.5mm head height; Printables keyhole-for-#6 reference):
 
-    KEYHOLE_WIDTH_MM        = 10.0   # X extent of the whole footprint
-    KEYHOLE_LENGTH_MM       = 17.0   # Y extent (vertical when placed)
-    KEYHOLE_BULB_DIAM_MM    = 10.0   # circular bulb, at the TOP of the footprint
-    KEYHOLE_SLOT_WIDTH_MM   = 4.0    # slot width, tapering to a point at the BOTTOM
-    KEYHOLE_LAYER1_DEPTH_MM = 4.0    # Z 0->4mm: the keyhole profile itself (bulb+slot)
-    KEYHOLE_LAYER2_DEPTH_MM = 4.0    # Z 4->8mm: wide oval relief pocket, full footprint
-    KEYHOLE_TOTAL_DEPTH_MM  = 8.0
+    KEYHOLE_WIDTH_MM        = 8.0    # X extent (== bulb diam)
+    KEYHOLE_LENGTH_MM       = 14.0   # Y extent (bulb + upward slot)
+    KEYHOLE_BULB_DIAM_MM    = 8.0    # circular bulb, at the BOTTOM
+    KEYHOLE_SLOT_WIDTH_MM   = 4.0    # slot width, tapering to a point at the TOP
+    KEYHOLE_LAYER1_DEPTH_MM = 1.2    # Z 0->1.2: keyhole silhouette lip
+    KEYHOLE_LAYER2_DEPTH_MM = 2.5    # Z 1.2->3.7: relief pocket for the head
+    KEYHOLE_TOTAL_DEPTH_MM  = 3.7
     SAFETY_MARGIN_MM        = 1.0    # required leftover material beyond the cavity
-    KEYHOLE_FILLET_MM       = 1.0    # target rounding radius, both transitions below
+    KEYHOLE_FILLET_MM       = 0.4    # target rounding radius, both transitions below
     KEYHOLE_Y_FRAC          = 0.75   # anchor Y = 0.75 * art.height_mm (both placements)
     KEYHOLE_X_FRAC          = 0.125  # anchor X = 0.125 * width (left), mirror (right)
     EDGE_MARGIN_MM          = 3.0    # min clearance used in the fit checks above
 
-Layer 1 (Z 0->4mm) cross-section: the keyhole silhouette itself — a circle
-of diameter KEYHOLE_BULB_DIAM_MM centered `bulb_diam/2` below the
-footprint's top edge, unioned with a KEYHOLE_SLOT_WIDTH_MM-wide channel
-running down from the bulb's center to a point near the footprint's bottom
-edge (a tapered polygon, e.g. a thin isoceles triangle/trapezoid — exact
-taper shape is a free choice, "narrowing to a point" is the only
-requirement).
+Layer 1 (Z 0->LAYER1) cross-section: the keyhole silhouette itself — a circle
+of diameter KEYHOLE_BULB_DIAM_MM centered `bulb_diam/2` above the
+footprint's bottom edge, unioned with a KEYHOLE_SLOT_WIDTH_MM-wide channel
+running up from the bulb's center to a point near the footprint's top edge.
 
-Layer 2 (Z 4->8mm) cross-section: a single oval/rounded-rectangle spanning
-the FULL footprint (KEYHOLE_WIDTH_MM x KEYHOLE_LENGTH_MM) — this is the
-"less detailed, bigger" face that ends up embedded inside the material,
-away from any external surface.
+Layer 2 (Z LAYER1->TOTAL) cross-section: a single oval spanning the FULL
+footprint — the roomier pocket that holds the screw head after the slide.
 
-Rounding (2b — confirmed): replace the sharp step between layer 1 and
-layer 2, and the sharp entry rim at Z=0, with graduated profiles across a
-couple of extra thin Z-slices (e.g. Z in [0, 1mm] blending from a
-KEYHOLE_FILLET_MM-larger entry profile down to the true layer-1 profile;
-Z in [3mm, 5mm] blending layer-1's profile out to layer-2's wider oval) —
-approximating a quarter-torus fillet within the existing per-Z-slice 2D
-model. No literal torus primitive needed; a handful of intermediate
-`shapely` `buffer()` amounts interpolated across 2-3 sub-slices is the
-expected implementation and is sufficient — the goal is "no unbroken 90
-degree internal step greater than ~1mm in a single slice," not a
-mathematically exact torus.
+Rounding (2b): graduated profiles across thin Z-slices for the entry rim
+and the layer1/layer2 step (shapely buffer interpolation; no literal torus).
 
 ===========================================================================
 2c — Kickstand fins (v3 — corrected LEAN MECHANICS; v2's X-spread tab fix
@@ -305,16 +292,16 @@ from app.core.types import Part, VectorizedArt
 
 _EPS = 1e-6
 
-# --- keyhole (2a/2b) constants (measured from the reference STL) -----------
-KEYHOLE_WIDTH_MM = 10.0
-KEYHOLE_LENGTH_MM = 17.0
-KEYHOLE_BULB_DIAM_MM = 10.0
+# --- keyhole (2a/2b): #6 pan-head / small nail ---------------------------
+KEYHOLE_WIDTH_MM = 8.0
+KEYHOLE_LENGTH_MM = 14.0
+KEYHOLE_BULB_DIAM_MM = 8.0
 KEYHOLE_SLOT_WIDTH_MM = 4.0
-KEYHOLE_LAYER1_DEPTH_MM = 4.0
-KEYHOLE_LAYER2_DEPTH_MM = 4.0
-KEYHOLE_TOTAL_DEPTH_MM = 8.0
+KEYHOLE_LAYER1_DEPTH_MM = 1.2
+KEYHOLE_LAYER2_DEPTH_MM = 2.5
+KEYHOLE_TOTAL_DEPTH_MM = KEYHOLE_LAYER1_DEPTH_MM + KEYHOLE_LAYER2_DEPTH_MM
 SAFETY_MARGIN_MM = 1.0
-KEYHOLE_FILLET_MM = 1.0
+KEYHOLE_FILLET_MM = 0.4
 KEYHOLE_Y_FRAC = 0.75
 KEYHOLE_X_FRAC = 0.125
 EDGE_MARGIN_MM = 3.0
@@ -417,18 +404,17 @@ def _keyhole_footprint(cx: float, cy: float) -> Polygon:
 
 
 def _keyhole_layer1(cx: float, cy: float) -> Polygon:
-    """The keyhole silhouette: bulb at the TOP, slot tapering to the bottom."""
+    """The keyhole silhouette: bulb at the BOTTOM, slot tapering upward."""
     y_top = cy + KEYHOLE_LENGTH_MM / 2
     y_bot = cy - KEYHOLE_LENGTH_MM / 2
-    bulb_cy = y_top - KEYHOLE_BULB_DIAM_MM / 2
+    bulb_cy = y_bot + KEYHOLE_BULB_DIAM_MM / 2
     bulb = Point(cx, bulb_cy).buffer(KEYHOLE_BULB_DIAM_MM / 2, quad_segs=_QUAD_SEGS)
-    # Slot: full width at the bulb center, narrowing to a point near the bottom.
     hw = KEYHOLE_SLOT_WIDTH_MM / 2
     slot = Polygon(
         [
             (cx - hw, bulb_cy),
             (cx + hw, bulb_cy),
-            (cx, y_bot + 0.5),
+            (cx, y_top - 0.5),
         ]
     )
     prof = unary_union([bulb, slot])
@@ -446,47 +432,45 @@ def _keyhole_layer2(cx: float, cy: float) -> Polygon:
 def _keyhole_cuts(cx: float, cy: float) -> list[HangCut]:
     """Stacked back-surface cuts with graduated fillet transitions.
 
-    Z layout (from the bed up):
-      [0, fillet]         entry countersink: layer1 buffered +FILLET -> layer1
-      [fillet, 3]         the true keyhole silhouette (layer1)
-      [3, 5]              blend layer1 out to the layer2 oval pocket
-      [5, TOTAL_DEPTH]    the layer2 oval pocket
-    Each blend is a handful of thin slices with interpolated shapes so no
-    single slice has an unbroken ~90-degree internal step > ~1mm.
+    Z layout (from the bed up), driven by the KEYHOLE_*_DEPTH constants:
+      [0, fillet]              entry countersink: layer1 buffered +FILLET -> layer1
+      [fillet, layer1]         the true keyhole silhouette (layer1)
+      [layer1, layer1+fillet]  blend layer1 out to the layer2 oval pocket
+      [layer1+fillet, TOTAL]  the layer2 oval pocket
     """
     layer1 = _keyhole_layer1(cx, cy)
     layer2 = _keyhole_layer2(cx, cy)
     cuts: list[HangCut] = []
 
     fillet = KEYHOLE_FILLET_MM
-    # Entry fillet [0, fillet]: widest at the bed, shrinking to layer1.
+    layer1_z = KEYHOLE_LAYER1_DEPTH_MM
+    blend_lo = layer1_z
+    blend_hi = min(layer1_z + fillet, KEYHOLE_TOTAL_DEPTH_MM)
+
     n_entry = 2
     dz = fillet / n_entry
     for i in range(n_entry):
         z0 = round(i * dz, 9)
         z1 = round((i + 1) * dz, 9)
-        amt = fillet * (1.0 - z0 / fillet)  # buffer at the slice bottom (widest)
+        amt = fillet * (1.0 - z0 / fillet)
         prof = layer1.buffer(amt) if amt > _EPS else layer1
         cuts.append(HangCut(z0, z1, _as_mp(prof)))
 
-    # True layer1 [fillet, 3].
-    cuts.append(HangCut(round(fillet, 9), 3.0, _as_mp(layer1)))
+    cuts.append(HangCut(round(fillet, 9), round(blend_lo, 9), _as_mp(layer1)))
 
-    # Blend [3, 5]: layer1 unioned with a growing erosion of the oval pocket.
-    n_blend = 10
-    z_lo, z_hi = 3.0, 5.0
-    shrink = KEYHOLE_LENGTH_MM / 2  # enough to empty the oval at t=0
-    dzb = (z_hi - z_lo) / n_blend
+    n_blend = 6
+    shrink = KEYHOLE_LENGTH_MM / 2
+    dzb = (blend_hi - blend_lo) / n_blend
     for i in range(n_blend):
-        z0 = round(z_lo + i * dzb, 9)
-        z1 = round(z_lo + (i + 1) * dzb, 9)
-        t = (z1 - z_lo) / (z_hi - z_lo)  # slice top: conservatively wider
+        z0 = round(blend_lo + i * dzb, 9)
+        z1 = round(blend_lo + (i + 1) * dzb, 9)
+        t = (z1 - blend_lo) / (blend_hi - blend_lo) if blend_hi > blend_lo else 1.0
         pocket = layer2.buffer(-(1.0 - t) * shrink)
         prof = unary_union([layer1, pocket]) if not pocket.is_empty else layer1
         cuts.append(HangCut(z0, z1, _as_mp(prof)))
 
-    # Layer2 pocket [5, TOTAL_DEPTH].
-    cuts.append(HangCut(5.0, KEYHOLE_TOTAL_DEPTH_MM, _as_mp(layer2)))
+    if blend_hi < KEYHOLE_TOTAL_DEPTH_MM - _EPS:
+        cuts.append(HangCut(round(blend_hi, 9), KEYHOLE_TOTAL_DEPTH_MM, _as_mp(layer2)))
     return cuts
 
 
@@ -667,6 +651,22 @@ def _fin_tab_cuts(ax: float, ay: float) -> list[HangCut]:
     return cuts
 
 
+def keyhole_min_depth_mm() -> float:
+    return KEYHOLE_TOTAL_DEPTH_MM + SAFETY_MARGIN_MM
+
+
+def fins_min_depth_mm() -> float:
+    return FIN_TAB_REACH_MM + FIN_TAB_CLEARANCE_MM + FIN_MARGIN_MM
+
+
+def hang_min_depth_mm(mode: str) -> float | None:
+    if mode == "keyhole":
+        return keyhole_min_depth_mm()
+    if mode == "fins":
+        return fins_min_depth_mm()
+    return None
+
+
 # ---------------------------------------------------------------------------
 # entry point
 # ---------------------------------------------------------------------------
@@ -709,8 +709,7 @@ def _plan_keyhole(
     model_top: float,
 ) -> None:
     w, h = art.width_mm, art.height_mm
-    depth = KEYHOLE_TOTAL_DEPTH_MM
-    need = depth + SAFETY_MARGIN_MM
+    need = keyhole_min_depth_mm()
     cy = KEYHOLE_Y_FRAC * h
     lx = KEYHOLE_X_FRAC * w
     rx = w - lx
@@ -754,8 +753,7 @@ def _plan_fins(
     model_top: float,
 ) -> None:
     w, h = art.width_mm, art.height_mm
-    depth = FIN_TAB_REACH_MM + FIN_TAB_CLEARANCE_MM
-    need = depth + FIN_MARGIN_MM
+    need = fins_min_depth_mm()
     ay = FIN_ANCHOR_HEIGHT_MM
     lx = FIN_X_FRAC * w
     rx = w - lx

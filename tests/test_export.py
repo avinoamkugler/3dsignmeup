@@ -14,6 +14,7 @@ from app.core.export import (
     render_clean_png,
     render_thin_overlay,
     write_3mf,
+    write_download_bundle,
     write_glb,
 )
 from app.core.types import Part, hex_to_rgb
@@ -174,3 +175,19 @@ def test_thin_overlay_pixels():
 def test_thin_overlay_deterministic():
     mask = np.array([[True, False], [True, True]], dtype=bool)
     assert render_thin_overlay(mask) == render_thin_overlay(mask)
+
+
+# --------------------------------------------------------------------------
+# download bundle zip
+# --------------------------------------------------------------------------
+def test_download_bundle_contains_members():
+    data = write_download_bundle([("sign.3mf", b"AAA"), ("clean.png", b"BBB")])
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        assert zf.namelist() == ["sign.3mf", "clean.png"]
+        assert zf.read("sign.3mf") == b"AAA"
+        assert zf.read("clean.png") == b"BBB"
+
+
+def test_download_bundle_deterministic():
+    files = [("sign.3mf", b"AAA"), ("fins.3mf", b"CCC"), ("clean.png", b"BBB")]
+    assert write_download_bundle(files) == write_download_bundle(files)

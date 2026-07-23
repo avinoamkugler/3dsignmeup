@@ -3,7 +3,7 @@
 Single entry point:
 
 run_cleanup(labels, palette, *, mm_per_px, smoothness, min_feature_mm,
-            clear_background, enclosed_background) -> CleanupResult
+            clear_background, enclosed_background, paint_fills=()) -> CleanupResult
 
 Fixed processing order (from the design doc):
 1. Smoothness: mode filtering on the label grid, kernel size scaled by
@@ -14,7 +14,10 @@ Fixed processing order (from the design doc):
    flood-fill every same-label region 4-connected to any corner -> TRANSPARENT.
    Originally-transparent pixels also count as corner-reachable background.
 4. Enclosed background resolution (only when clear_background).
-5. Thin-feature scan (detection only).
+5. Paint-bucket fills (optional): each op flood-fills the single 4-connected
+   component under a click to a chosen palette color, or erases it to
+   TRANSPARENT (through-hole in art and plate) when to_hex is null.
+6. Thin-feature scan (detection only).
 
 Spatial parameters scale by mm_per_px so results are resolution independent.
 
@@ -29,6 +32,8 @@ Implementation choices documented inline:
   "dominant surrounding label" for tiny regions. Iterated up to 3 passes.
 """
 from __future__ import annotations
+
+from collections.abc import Sequence
 
 import cv2
 import numpy as np
@@ -135,6 +140,50 @@ def _thin_mask(labels: Labels, n_colors: int, radius: int) -> np.ndarray | None:
     return thin if thin.any() else None
 
 
+def apply_paint_fills(
+    labels: Labels,
+    body_fill_mask: np.ndarray,
+    palette: list[str],
+    paint_fills: Sequence[tuple[int, int, str | None]],
+) -> tuple[Labels, np.ndarray]:
+    """Apply ordered paint-bucket ops: each floods one connected component.
+
+    Each fill is ``(x, y, to_hex)`` in image space (row 0 = top). ``to_hex``
+    null means erase to TRANSPARENT (through-hole in art and plate). Only
+    solid palette pixels (label >= 0) are fillable. Painted body-fill pixels
+    lose their body-fill flag.
+    """
+    if not paint_fills:
+        return labels, body_fill_mask
+    out = labels.copy()
+    bf = body_fill_mask.copy()
+    hex_to_idx = {hx: i for i, hx in enumerate(palette)}
+    h, w = out.shape
+    for x, y, to_hex in paint_fills:
+        if x < 0 or y < 0 or x >= w or y >= h:
+            continue
+        src = int(out[y, x])
+        if src < 0:
+            continue
+        if to_hex is None:
+            to_idx = None
+        else:
+            to_idx = hex_to_idx.get(to_hex)
+            if to_idx is None or src == to_idx:
+                continue
+        cc = cc_label(out == src, connectivity=1)
+        cid = int(cc[y, x])
+        if cid == 0:
+            continue
+        region = cc == cid
+        if to_hex is None:
+            out[region] = TRANSPARENT
+        else:
+            out[region] = to_idx
+        bf[region] = False
+    return out, bf
+
+
 def run_cleanup(
     labels: Labels,
     palette: list[str],
@@ -144,6 +193,7 @@ def run_cleanup(
     min_feature_mm: float,
     clear_background: bool,
     enclosed_background: str,
+    paint_fills: Sequence[tuple[int, int, str | None]] | None = None,
 ) -> CleanupResult:
     n = len(palette)
     labels = np.asarray(labels, dtype=np.int16).copy()
@@ -178,7 +228,13 @@ def run_cleanup(
                         f"unknown enclosed_background: {enclosed_background!r}"
                     )
 
-    # 5. Thin-feature scan (detection only, never mutates labels).
+    # 5. Paint-bucket fills (after cleanup so clicks match the preview).
+    if paint_fills:
+        labels, body_fill_mask = apply_paint_fills(
+            labels, body_fill_mask, palette, paint_fills
+        )
+
+    # 6. Thin-feature scan (detection only, never mutates labels).
     thin_radius = int(round(min_feature_mm / 2 / mm_per_px))
     thin = _thin_mask(labels, n, thin_radius)
 

@@ -289,6 +289,50 @@ input[type="range"] {
   text-decoration: underline;
 }
 .btn-link:hover { color: var(--accent-hover); }
+.btn-link:disabled { color: var(--text-faint); cursor: default; text-decoration: none; }
+
+.paint-tools { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.paint-fill-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.paint-tool-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.paint-tool-icon svg { display: block; }
+.paint-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.paint-chip {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.15);
+}
+.paint-chip.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.paint-erase {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-raised);
+  color: var(--text-dim);
+}
+.paint-erase.selected { color: var(--accent); }
+.paint-erase-icon { display: block; pointer-events: none; }
+.paint-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.paint-count { font-size: 12px; color: var(--text-faint); }
+.preview-stage.paint-cursor { cursor: crosshair; }
+.preview-stage.paint-cursor img { cursor: crosshair; }
+.field .hint {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
 
 /* ---------- Preview pane ---------- */
 .preview-pane { display: flex; flex-direction: column; gap: 12px; }
@@ -340,6 +384,12 @@ input[type="range"] {
   background: var(--amber-bg);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
+}
+.hang-depth-hint {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.4;
 }
 
 .spinner {
@@ -587,7 +637,7 @@ input[type="range"] {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   color: var(--text-dim);
 }
-.download-row { display: flex; gap: 12px; }
+.download-row { display: flex; flex-wrap: wrap; gap: 12px; }
 
 /* ---------- Review side ---------- */
 .review-side { display: flex; flex-direction: column; gap: 20px; }

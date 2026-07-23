@@ -95,8 +95,39 @@
               </div>
 
               <div class="field">
-                <label for="smoothness">Smoothness <span class="val" id="smoothness-val">4</span></label>
-                <input type="range" id="smoothness" min="0" max="10" step="1" value="4" />
+                <label>Paint bucket</label>
+                <p class="hint">Click the preview to recolor or erase a region</p>
+                <div class="paint-tools" id="paint-tools">
+                  <div class="paint-fill-row">
+                    <span class="paint-tool-icon" title="Paint bucket" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="18" height="18">
+                        <path d="M3.5 11.5 11.3 3.7a1.5 1.5 0 0 1 2.1 0l6.9 6.9a1.5 1.5 0 0 1 0 2.1l-7.8 7.8a2 2 0 0 1-2.8 0L3.5 14.3a2 2 0 0 1 0-2.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                        <path d="M7 8.5 9.5 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                        <path d="M2.5 14.5h12.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                        <path d="M19.2 16.2c.9 0 2.3.8 2.3 2.3 0 1.3-1.1 2.3-2.3 2.3s-2.3-1-2.3-2.3c0-1.5 1.4-2.3 2.3-2.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                      </svg>
+                    </span>
+                    <div class="paint-swatches" id="paint-swatches"></div>
+                    <button type="button" class="paint-chip paint-erase" id="paint-erase" title="Erase to through-hole (removes art and plate)" aria-label="Erase to hole">
+                      <svg class="paint-erase-icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                        <path d="M4 16.5 9.5 11l7 7-3.2 3.2a2 2 0 0 1-2.8 0L4 16.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                        <path d="M9.5 11 14.2 6.3a2 2 0 0 1 2.8 0l2.7 2.7a2 2 0 0 1 0 2.8L14.5 17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                        <path d="M8.2 16.8 13 12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                        <path d="M3 21h12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="paint-actions">
+                    <button type="button" class="btn-link" id="paint-undo" disabled>Undo</button>
+                    <button type="button" class="btn-link" id="paint-clear" disabled>Clear paints</button>
+                    <span class="paint-count" id="paint-count"></span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="smoothness">Smoothness <span class="val" id="smoothness-val">1</span></label>
+                <input type="range" id="smoothness" min="0" max="10" step="1" value="1" />
               </div>
 
               <div class="field">
@@ -173,10 +204,6 @@
                 <label for="layer-height">Layer height (mm)</label>
                 <input type="number" id="layer-height" min="0.01" step="0.01" value="0.2" />
               </div>
-              <div class="field">
-                <label for="first-layer-height">First layer height (mm)</label>
-                <input type="number" id="first-layer-height" min="0.01" step="0.01" value="0.2" />
-              </div>
 
               <div class="field span-all">
                 <label>Per-color heights</label>
@@ -193,7 +220,7 @@
                   <input type="checkbox" id="plate-enabled" checked />
                   <span>Backing plate</span>
                 </label>
-                <input type="number" id="plate-thickness" min="0.01" step="0.1" value="1.2" title="Plate thickness (mm)" />
+                <input type="number" id="plate-thickness" min="0.01" step="0.2" value="2.0" title="Plate thickness (mm)" />
               </div>
 
               <div class="field checkbox-field">
@@ -206,7 +233,7 @@
 
               <div class="field" id="lead-field">
                 <label for="initial-lead">Initial color switch lead (mm)</label>
-                <input type="number" id="initial-lead" min="0" step="0.1" value="2.0" />
+                <input type="number" id="initial-lead" min="0" step="0.2" value="0.4" />
               </div>
 
               <div class="field span-all">
@@ -216,6 +243,7 @@
                   <button type="button" class="toggle-btn" data-hang="keyhole">Keyhole slots</button>
                   <button type="button" class="toggle-btn" data-hang="fins">Kickstand fins</button>
                 </div>
+                <p class="hang-depth-hint" id="hang-depth-hint" hidden></p>
               </div>
 
               <div class="field span-all" id="fin-angle-field" hidden>
@@ -263,7 +291,9 @@
               </div>
               <div class="download-row">
                 <a class="btn btn-primary" id="dl-3mf" download>⬇ sign.3mf</a>
+                <a class="btn btn-secondary" id="dl-fins" download hidden>⬇ fins.3mf</a>
                 <a class="btn btn-secondary" id="dl-png" download>⬇ clean.png</a>
+                <a class="btn btn-secondary" id="dl-zip" download>⬇ all.zip</a>
               </div>
             </div>
 

@@ -34,6 +34,7 @@ _MEDIA_TYPES = {
     ".png": "image/png",
     ".glb": "model/gltf-binary",
     ".3mf": "application/vnd.ms-package.3dmanufacturing-3dmodel+3mf",
+    ".zip": "application/zip",
 }
 
 
@@ -118,6 +119,7 @@ def preview(request: Request, session_id: str, params: ProcessParams) -> Preview
         min_feature_mm=params.min_feature_mm,
         clear_background=params.clear_background,
         enclosed_background=params.enclosed_background,
+        paint_fills=[(f.x, f.y, f.to_hex) for f in params.paint_fills],
     )
 
     png = export.render_clean_png(result.labels, params.palette)
@@ -168,6 +170,7 @@ def build_model(request: Request, session_id: str, body: ModelRequest) -> ModelR
         and (mdir / "sign.3mf").exists()
         and (mdir / "preview.glb").exists()
         and (mdir / "clean.png").exists()
+        and (mdir / "bundle.zip").exists()
     ):
         return ModelResponse.model_validate_json(meta_path.read_text())
 
@@ -184,15 +187,31 @@ def build_model(request: Request, session_id: str, body: ModelRequest) -> ModelR
         min_feature_mm=process.min_feature_mm,
         clear_background=process.clear_background,
         enclosed_background=process.enclosed_background,
+        paint_fills=[(f.x, f.y, f.to_hex) for f in process.paint_fills],
     )
     art = vectorize.vectorize(
         result, process.palette, mm_per_px=mm_per_px, smoothness=process.smoothness
     )
     built = geometry.build_model(art, extrude)
 
-    (mdir / "sign.3mf").write_bytes(export.write_3mf(built.parts))
-    (mdir / "preview.glb").write_bytes(export.write_glb(built.parts))
-    (mdir / "clean.png").write_bytes(export.render_clean_png(result.labels, process.palette))
+    sign_parts = [p for p in built.parts if not p.name.startswith("fin_")]
+    fin_parts = [p for p in built.parts if p.name.startswith("fin_")]
+
+    sign_3mf = export.write_3mf(sign_parts)
+    clean_png = export.render_clean_png(result.labels, process.palette)
+    (mdir / "sign.3mf").write_bytes(sign_3mf)
+    (mdir / "preview.glb").write_bytes(export.write_glb(sign_parts))
+    (mdir / "clean.png").write_bytes(clean_png)
+
+    bundle_files = [("sign.3mf", sign_3mf), ("clean.png", clean_png)]
+    fins_url = None
+    if fin_parts:
+        fins_3mf = export.write_3mf(fin_parts)
+        (mdir / "fins.3mf").write_bytes(fins_3mf)
+        bundle_files.append(("fins.3mf", fins_3mf))
+        fins_url = f"/api/sessions/{sess.id}/models/{model_id}/fins.3mf"
+
+    (mdir / "bundle.zip").write_bytes(export.write_download_bundle(bundle_files))
 
     parts = [
         PartInfo(name=p.name, color=p.color, triangles=len(p.mesh.faces))
@@ -218,6 +237,8 @@ def build_model(request: Request, session_id: str, body: ModelRequest) -> ModelR
         downloads=Downloads(
             threemf=f"/api/sessions/{sess.id}/models/{model_id}/sign.3mf",
             png=f"/api/sessions/{sess.id}/models/{model_id}/clean.png",
+            zip=f"/api/sessions/{sess.id}/models/{model_id}/bundle.zip",
+            fins_threemf=fins_url,
         ),
     )
     meta_path.write_text(resp.model_dump_json(by_alias=True))

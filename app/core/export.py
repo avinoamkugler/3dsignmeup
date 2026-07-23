@@ -191,3 +191,13 @@ def render_thin_overlay(thin_mask: np.ndarray) -> bytes:
     rgba[m, 2] = 255
     rgba[m, 3] = 255
     return _png_bytes(rgba)
+
+
+def write_download_bundle(files: list[tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, data in files:
+            info = zipfile.ZipInfo(name, date_time=_ZIP_DATE)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            zf.writestr(info, data)
+    return buf.getvalue()

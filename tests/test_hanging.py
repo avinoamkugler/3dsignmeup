@@ -119,15 +119,15 @@ def test_keyhole_two_sided_placement():
     assert z1 == pytest.approx(hanging.KEYHOLE_TOTAL_DEPTH_MM)
 
 
-def test_keyhole_bulb_is_at_top():
+def test_keyhole_bulb_is_at_bottom():
     art = _art(100, 100)
     plan = _plan(art, _extrude("keyhole"), tops={R: DEEP})
-    # The true layer-1 silhouette slice is [FILLET, 3].
+    # The true layer-1 silhouette slice is [FILLET, LAYER1_DEPTH].
     layer1_cuts = [
         c
         for c in plan.cuts
         if math.isclose(c.z0_mm, hanging.KEYHOLE_FILLET_MM, abs_tol=1e-6)
-        and math.isclose(c.z1_mm, 3.0, abs_tol=1e-6)
+        and math.isclose(c.z1_mm, hanging.KEYHOLE_LAYER1_DEPTH_MM, abs_tol=1e-6)
     ]
     assert layer1_cuts, "expected a true layer-1 slice"
     for c in layer1_cuts:
@@ -136,12 +136,12 @@ def test_keyhole_bulb_is_at_top():
         x0, y0, x1, y1 = prof.bounds
         top = prof.intersection(box(x0, cy, x1, y1))
         bot = prof.intersection(box(x0, y0, x1, cy))
-        # bulb (wide circle) sits in the upper half: more area AND wider there.
-        assert top.area > bot.area
+        # bulb (wide circle) sits in the lower half: more area AND wider there.
+        assert bot.area > top.area
         top_w = top.bounds[2] - top.bounds[0]
         bot_w = bot.bounds[2] - bot.bounds[0]
-        assert top_w > bot_w
-        assert top_w == pytest.approx(hanging.KEYHOLE_BULB_DIAM_MM, abs=0.1)
+        assert bot_w > top_w
+        assert bot_w == pytest.approx(hanging.KEYHOLE_BULB_DIAM_MM, abs=0.1)
 
 
 # --------------------------------------------------------------------------
@@ -165,13 +165,25 @@ def test_keyhole_skipped_too_small():
 
 
 def test_keyhole_skipped_insufficient_depth():
-    # Plenty of room in XY, but the whole model is too thin to hollow 8+1mm.
+    # Plenty of room in XY, but the whole model is too thin for cavity + safety.
     art = _art(100, 100)
     shallow = hanging.KEYHOLE_TOTAL_DEPTH_MM  # < depth + SAFETY_MARGIN
     plan = _plan(art, _extrude("keyhole"), tops={}, regions={}, model_top=shallow)
     assert plan.cuts == []
     assert [w["code"] for w in plan.warnings] == ["hang_skipped"]
     assert "depth" in plan.warnings[0]["msg"]
+
+
+def test_keyhole_min_depth_matches_placement_need():
+    assert hanging.keyhole_min_depth_mm() == pytest.approx(
+        hanging.KEYHOLE_TOTAL_DEPTH_MM + hanging.SAFETY_MARGIN_MM
+    )
+    assert hanging.fins_min_depth_mm() == pytest.approx(
+        hanging.FIN_TAB_REACH_MM + hanging.FIN_TAB_CLEARANCE_MM + hanging.FIN_MARGIN_MM
+    )
+    assert hanging.hang_min_depth_mm("keyhole") == hanging.keyhole_min_depth_mm()
+    assert hanging.hang_min_depth_mm("fins") == hanging.fins_min_depth_mm()
+    assert hanging.hang_min_depth_mm("none") is None
 
 
 def test_keyhole_depth_excludes_overlapping_color_region():

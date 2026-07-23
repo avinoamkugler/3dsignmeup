@@ -13,11 +13,10 @@ from app.core.swapplan import compute_plan, snap_z
 
 
 def _extrude(mode="swap", colors=None, body="#ff0000", lead=2.0,
-             lh=0.2, flh=0.2, plate=False, plate_th=1.2):
+             lh=0.2, plate=False, plate_th=1.2):
     return ExtrudeParams(
         mode=mode,
         layer_height_mm=lh,
-        first_layer_height_mm=flh,
         plate=PlateParams(enabled=plate, thickness_mm=plate_th),
         main_body_color=body,
         colors=colors or [],
@@ -30,32 +29,26 @@ def _extrude(mode="swap", colors=None, body="#ff0000", lead=2.0,
 # snap_z
 # --------------------------------------------------------------------------
 def test_snap_z_exact():
-    assert snap_z(1.0, layer_height_mm=0.2, first_layer_height_mm=0.2) == (1.0, 5)
+    assert snap_z(1.0, layer_height_mm=0.2) == (1.0, 5)
 
 
 def test_snap_z_min_one_layer():
-    # Anything below/at the first layer snaps to exactly one layer.
-    assert snap_z(0.05, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.2, 1)
-    assert snap_z(0.0, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.2, 1)
-    assert snap_z(-5.0, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.2, 1)
+    # Anything below/at one layer snaps to exactly one layer.
+    assert snap_z(0.05, layer_height_mm=0.2) == (0.2, 1)
+    assert snap_z(0.0, layer_height_mm=0.2) == (0.2, 1)
+    assert snap_z(-5.0, layer_height_mm=0.2) == (0.2, 1)
 
 
 def test_snap_z_tie_rounds_up():
     # 0.3 is exactly halfway between 0.2 and 0.4 -> rounds up to 0.4.
-    assert snap_z(0.3, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.4, 2)
+    assert snap_z(0.3, layer_height_mm=0.2) == (0.4, 2)
     # 0.5 halfway between 0.4 and 0.6 -> 0.6.
-    assert snap_z(0.5, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.6, 3)
+    assert snap_z(0.5, layer_height_mm=0.2) == (0.6, 3)
 
 
 def test_snap_z_nearest():
-    assert snap_z(0.28, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.2, 1)
-    assert snap_z(0.33, layer_height_mm=0.2, first_layer_height_mm=0.2) == (0.4, 2)
-
-
-def test_snap_z_different_first_layer():
-    # first layer 0.3, then 0.2 each.
-    assert snap_z(0.3, layer_height_mm=0.2, first_layer_height_mm=0.3) == (0.3, 1)
-    assert snap_z(0.5, layer_height_mm=0.2, first_layer_height_mm=0.3) == (0.5, 2)
+    assert snap_z(0.28, layer_height_mm=0.2) == (0.2, 1)
+    assert snap_z(0.33, layer_height_mm=0.2) == (0.4, 2)
 
 
 # --------------------------------------------------------------------------
@@ -118,11 +111,50 @@ def test_equal_heights_are_siblings_extra_swap():
     # One band ends at the shared top (5.0) with the dominant color.
     tops = [b.z1_mm for b in plan.bands]
     assert 5.0 in tops
-    # sibling adds one extra swap beyond the band events.
-    assert plan.n_swaps == len(plan.events) + 1
+    # Sibling mid-layer swap is a real event, not a phantom count.
+    assert any(e.from_hex == G and e.to_hex == B for e in plan.events)
+    assert plan.n_swaps == len(plan.events)
+    assert len(plan.sibling_spans) == 1
+    assert plan.sibling_spans[0].hexes == [G, B]
+    assert plan.sibling_spans[0].z0_mm == pytest.approx(3.0)
+    assert plan.sibling_spans[0].z1_mm == pytest.approx(5.0)
 
 
-def test_first_layer_only_swap_count():
+def test_body_dominant_equal_height_still_gets_lead_and_sibling_event():
+    # Body wins perimeter-order for an equal-height pair; the foreign sibling
+    # must still start at the lead swap Z (not the bed) and appear in the plan.
+    R, G, B = "#ff0000", "#00ff00", "#0000ff"
+    colors = [
+        ColorSpec(hex=B, height_mm=5.0),  # body, listed first -> dominant
+        ColorSpec(hex=G, height_mm=5.0),
+        ColorSpec(hex=R, height_mm=10.0),
+    ]
+    plan = compute_plan(_extrude(colors=colors, body=B, lead=2.0), colors)
+    bands = [(b.z0_mm, b.z1_mm, b.hex) for b in plan.bands]
+    assert bands == [(0.0, 5.0, B), (5.0, 10.0, R)]
+    events = {(e.z_mm, e.from_hex, e.to_hex) for e in plan.events}
+    assert (3.0, B, G) in events
+    assert (5.0, B, R) in events
+    assert plan.n_swaps == 2
+    assert plan.sibling_spans[0].z0_mm == pytest.approx(3.0)
+    assert plan.sibling_spans[0].hexes == [B, G]
+
+
+def test_equal_height_only_siblings_lists_swap_event():
+    G, B = "#00ff00", "#0000ff"
+    colors = [
+        ColorSpec(hex=B, height_mm=5.0),
+        ColorSpec(hex=G, height_mm=5.0),
+    ]
+    plan = compute_plan(_extrude(colors=colors, body=B, lead=2.0), colors)
+    assert len(plan.bands) == 1
+    assert plan.bands[0].hex == B
+    assert plan.n_swaps == 1
+    assert len(plan.events) == 1
+    assert plan.events[0].from_hex == B and plan.events[0].to_hex == G
+
+
+def test_first_layer_only_ignored_in_swap_count():
     R, G, W = "#ff0000", "#00ff00", "#ffffff"
     colors = [
         ColorSpec(hex=R, height_mm=6.0),
@@ -130,9 +162,8 @@ def test_first_layer_only_swap_count():
         ColorSpec(hex=W, height_mm=1.0, first_layer_only=True),
     ]
     plan = compute_plan(_extrude(colors=colors, body=R, lead=2.0), colors)
-    # FLO color excluded from ascending-top ordering (no band ends at its top).
-    # It adds (k+1) swaps for k=1 non-body FLO color -> +2.
-    assert plan.n_swaps == len(plan.events) + 2
+    # FLO colors are excluded from band ordering and from the swap count.
+    assert plan.n_swaps == len(plan.events)
 
 
 # --------------------------------------------------------------------------

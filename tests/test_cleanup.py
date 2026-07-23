@@ -153,3 +153,69 @@ def test_smoothing_never_introduces_new_labels():
         clear_background=False, enclosed_background="plate",
     )
     assert set(np.unique(res.labels).tolist()) <= {TRANSPARENT, 0, 1, 2}
+
+
+def test_paint_fill_recolors_one_connected_component():
+    # Two disconnected red (#e63946 = idx 1) blobs; paint only the left one white.
+    labels = np.zeros((40, 60), np.int16)
+    labels[5:15, 5:15] = 1
+    labels[5:15, 40:50] = 1
+    res = run_cleanup(
+        labels, PAL3, mm_per_px=0.1, smoothness=0, min_feature_mm=0.1,
+        clear_background=False, enclosed_background="plate",
+        paint_fills=[(10, 10, "#f1faee")],
+    )
+    assert (res.labels[5:15, 5:15] == 2).all()
+    assert (res.labels[5:15, 40:50] == 1).all()
+
+
+def test_paint_fill_skips_transparent():
+    labels = np.full((20, 20), TRANSPARENT, np.int16)
+    labels[5:15, 5:15] = 0
+    res = run_cleanup(
+        labels, PAL3, mm_per_px=0.1, smoothness=0, min_feature_mm=0.1,
+        clear_background=False, enclosed_background="plate",
+        paint_fills=[(0, 0, "#e63946")],
+    )
+    assert res.labels[0, 0] == TRANSPARENT
+    assert (res.labels[5:15, 5:15] == 0).all()
+
+
+def test_paint_fills_apply_in_order():
+    labels = np.zeros((30, 30), np.int16)
+    labels[5:25, 5:25] = 1
+    res = run_cleanup(
+        labels, PAL3, mm_per_px=0.1, smoothness=0, min_feature_mm=0.1,
+        clear_background=False, enclosed_background="plate",
+        paint_fills=[
+            (15, 15, "#f1faee"),
+            (15, 15, "#1a1a1a"),
+        ],
+    )
+    assert (res.labels[5:25, 5:25] == 0).all()
+
+
+def test_paint_erase_to_through_hole():
+    labels = np.zeros((40, 60), np.int16)
+    labels[5:15, 5:15] = 1
+    labels[5:15, 40:50] = 1
+    res = run_cleanup(
+        labels, PAL3, mm_per_px=0.1, smoothness=0, min_feature_mm=0.1,
+        clear_background=False, enclosed_background="plate",
+        paint_fills=[(10, 10, None)],
+    )
+    assert (res.labels[5:15, 5:15] == TRANSPARENT).all()
+    assert (res.labels[5:15, 40:50] == 1).all()
+
+
+def test_paint_erase_cuts_plate_even_when_enclosed_is_plate():
+    labels = np.zeros((30, 30), np.int16)
+    labels[5:25, 5:25] = 1
+    res = run_cleanup(
+        labels, PAL3, mm_per_px=0.1, smoothness=0, min_feature_mm=0.1,
+        clear_background=False, enclosed_background="plate",
+        paint_fills=[(15, 15, None)],
+    )
+    assert (res.labels[5:25, 5:25] == TRANSPARENT).all()
+    assert not (res.labels == HOLE_PLATE).any()
+

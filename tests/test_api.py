@@ -8,6 +8,7 @@ them (module.attr style), which is what makes monkeypatch.setattr work.
 from __future__ import annotations
 
 import io
+import zipfile
 
 import numpy as np
 import pytest
@@ -32,7 +33,6 @@ _PROCESS = {
 _EXTRUDE = {
     "mode": "swap",
     "layer_height_mm": 0.2,
-    "first_layer_height_mm": 0.2,
     "plate": {"enabled": True, "thickness_mm": 1.2},
     "main_body_color": "#111111",
     "colors": [
@@ -239,6 +239,8 @@ def test_model_happy(client, calls):
     assert body["preview_glb"] == f"/api/sessions/{sid}/models/{mid}/preview.glb"
     assert body["downloads"]["threemf"] == f"/api/sessions/{sid}/models/{mid}/sign.3mf"
     assert body["downloads"]["png"] == f"/api/sessions/{sid}/models/{mid}/clean.png"
+    assert body["downloads"]["zip"] == f"/api/sessions/{sid}/models/{mid}/bundle.zip"
+    assert body["downloads"]["fins_threemf"] is None
 
     # Second identical call is cached (no recompute).
     assert calls["build"] == 1
@@ -264,6 +266,14 @@ def test_model_downloads_served(client):
     png = client.get(body["downloads"]["png"])
     assert png.status_code == 200
     assert png.headers["content-type"] == "image/png"
+
+    zipped = client.get(body["downloads"]["zip"])
+    assert zipped.status_code == 200
+    assert zipped.headers["content-type"] == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(zipped.content)) as zf:
+        assert set(zf.namelist()) == {"sign.3mf", "clean.png"}
+        assert zf.read("sign.3mf") == b"3MF_DATA"
+        assert zf.read("clean.png") == b"\x89PNG_clean"
 
 
 def test_model_missing_palette_color_400(client):

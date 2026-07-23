@@ -44,13 +44,12 @@ def _art(color_regions, *, body_fill=None, plate=None, w=20.0, h=30.0):
     )
 
 
-def _extrude(mode="swap", colors=None, body=R, lead=2.0, lh=0.2, flh=0.2,
+def _extrude(mode="swap", colors=None, body=R, lead=2.0, lh=0.2,
              plate=False, plate_th=1.2, chamfer=False, chamfer_size=0.6,
              hang=None):
     return ExtrudeParams(
         mode=mode,
         layer_height_mm=lh,
-        first_layer_height_mm=flh,
         plate=PlateParams(enabled=plate, thickness_mm=plate_th),
         main_body_color=body,
         colors=colors or [],
@@ -150,7 +149,6 @@ def test_ams_cap_thickness():
         ],
         body=R,
         lh=0.2,
-        flh=0.2,
     )
     model = build_model(art, ex)
     _all_watertight(model)
@@ -282,7 +280,33 @@ def test_equal_height_sibling_parts():
     # Both G and B appear as parts.
     colors = {p.color for p in model.parts}
     assert G in colors and B in colors
-    assert model.n_swaps == len(model.swap_plan) + 1
+    assert model.n_swaps == len(model.swap_plan)
+    assert any((e.from_hex, e.to_hex) in {(B, G), (G, B)} for e in model.swap_plan)
+
+
+def test_body_dominant_sibling_respects_lead():
+    # Larger B region is body+dominant; G is the equal-height foreign sibling.
+    # G must only print after the lead swap, not from the bed.
+    left = box(0, 0, 8, 30)
+    right = box(8, 0, 20, 30)
+    art = _art({B: _mp(right), G: _mp(left), R: _mp(box(0, 0, 20, 30))})
+    ex = _extrude(
+        mode="swap",
+        colors=[
+            ColorSpec(hex=B, height_mm=5.0),
+            ColorSpec(hex=G, height_mm=5.0),
+            ColorSpec(hex=R, height_mm=10.0),
+        ],
+        body=B,
+    )
+    model = build_model(art, ex)
+    _all_watertight(model)
+    g_parts = [p for p in model.parts if p.color == G]
+    assert g_parts
+    for p in g_parts:
+        assert p.mesh.bounds[0][2] == pytest.approx(3.0, abs=1e-6)
+        assert p.mesh.bounds[1][2] == pytest.approx(5.0, abs=1e-6)
+    assert (3.0, B, G) in [(e.z_mm, e.from_hex, e.to_hex) for e in model.swap_plan]
 
 
 # --------------------------------------------------------------------------
@@ -328,7 +352,7 @@ def test_build_model_keyhole_carves_without_new_parts():
     # keyhole cuts material from existing band parts; part count is unchanged.
     assert len(key.parts) == len(base.parts)
     assert {p.name for p in key.parts} == {p.name for p in base.parts}
-    # total volume strictly decreases (two 8mm-deep cavities removed).
+    # total volume strictly decreases (keyhole cavities removed).
     assert sum(p.mesh.volume for p in key.parts) < sum(p.mesh.volume for p in base.parts)
     # swap-mode plan is untouched by hanging.
     assert key.n_swaps == base.n_swaps

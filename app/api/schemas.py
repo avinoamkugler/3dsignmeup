@@ -19,12 +19,27 @@ def _normalize_hex(v: str) -> str:
     return v.lower()
 
 
+class PaintFill(BaseModel):
+    """One paint-bucket click: flood-fill the connected label region at (x, y)
+    to ``to_hex``, or erase it to a through-hole when ``to_hex`` is null.
+    Image-space coords (row 0 = top)."""
+
+    x: int = Field(ge=0)
+    y: int = Field(ge=0)
+    to_hex: str | None = None
+
+    @field_validator("to_hex")
+    @classmethod
+    def _hex(cls, v: str | None) -> str | None:
+        return None if v is None else _normalize_hex(v)
+
+
 class ProcessParams(BaseModel):
     """Body of POST /api/sessions/{id}/preview; also half of /model."""
 
     target_width_mm: float = Field(gt=0, le=1000)
     palette: list[str] = Field(min_length=2, max_length=10)
-    smoothness: int = Field(default=4, ge=0, le=10)
+    smoothness: int = Field(default=1, ge=0, le=10)
     min_feature_mm: float = Field(default=0.5, gt=0)
     clear_background: bool = True
     enclosed_background: Literal["through_hole", "plate", "fill"] = "plate"
@@ -36,6 +51,10 @@ class ProcessParams(BaseModel):
     quantized) from "what color does that region display as" (freely
     editable) — the "keep original color distribution" toggle. None
     (default) quantizes against `palette` directly, i.e. today's behavior."""
+    paint_fills: list[PaintFill] = Field(default_factory=list)
+    """Ordered paint-bucket ops applied after cleanup: each flood-fills the
+    single connected component under the click to ``to_hex``, or erases it to
+    a through-hole when ``to_hex`` is null."""
 
     @field_validator("palette", "quantize_palette")
     @classmethod
@@ -45,7 +64,7 @@ class ProcessParams(BaseModel):
 
 class PlateParams(BaseModel):
     enabled: bool = True
-    thickness_mm: float = Field(default=1.2, gt=0)
+    thickness_mm: float = Field(default=2.0, gt=0)
 
 
 class ChamferParams(BaseModel):
@@ -83,11 +102,10 @@ class HangParams(BaseModel):
 class ExtrudeParams(BaseModel):
     mode: Literal["ams", "swap"]
     layer_height_mm: float = Field(default=0.2, gt=0)
-    first_layer_height_mm: float = Field(default=0.2, gt=0)
     plate: PlateParams = PlateParams()
     main_body_color: str
     colors: list[ColorSpec] = Field(min_length=1)
-    initial_color_switch_mm: float = Field(default=2.0, ge=0)
+    initial_color_switch_mm: float = Field(default=0.4, ge=0)
     chamfer: ChamferParams = ChamferParams()
     hang: HangParams = HangParams()
 
@@ -162,6 +180,8 @@ class WarningOut(BaseModel):
 class Downloads(BaseModel):
     threemf: str
     png: str
+    zip: str
+    fins_threemf: str | None = None
 
 
 class ModelResponse(BaseModel):

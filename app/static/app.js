@@ -17,22 +17,24 @@ const state = {
   process: {            // ProcessParams (screen 2)
     target_width_mm: 120,
     palette: [],
-    smoothness: 4,
+    smoothness: 1,
     min_feature_mm: 0.5,
     clear_background: true,
     enclosed_background: "plate",
+    paint_fills: [],    // [{x, y, to_hex}] paint-bucket ops; to_hex null = erase
   },
+  paintHex: null,       // selected fill-with palette hex
+  paintErase: false,    // when true, clicks erase to hole instead of recoloring
   lastPreview: null,    // last successful PreviewResponse
   approvedProcess: null,// exact ProcessParams carried into screen 3
   coverage: {},         // color_coverage from last preview
   extrude: {            // ExtrudeParams (screen 3)
     mode: "swap",
     layer_height_mm: 0.2,
-    first_layer_height_mm: 0.2,
-    plate: { enabled: true, thickness_mm: 1.2 },
+    plate: { enabled: true, thickness_mm: 2.0 },
     main_body_color: null,
     colors: [],         // [{hex, height_mm, first_layer_only}]
-    initial_color_switch_mm: 2.0,
+    initial_color_switch_mm: 0.4,
     chamfer: { enabled: true, size_mm: 0.6 },
     hang: { mode: "none", fin_angle_deg: 15 }, // HangParams
   },
@@ -168,9 +170,13 @@ async function handleFile(file) {
     state.session = data;
     state.palette = (data.suggested_palette || []).slice();
     state.process.palette = state.palette.slice();
+    state.process.paint_fills = [];
+    state.paintHex = state.palette[0] || null;
+    state.paintErase = false;
     snapshotQuantizePalette(); // freeze pixel->label assignment against the freshly detected palette
     $("#upload-meta").textContent =
       `${data.width_px} × ${data.height_px}px · ${state.palette.length} colors detected`;
+    updatePaintUI();
     $("#upload-next").disabled = false;
     buildScreen2();
   } catch (err) {
@@ -200,7 +206,11 @@ function buildScreen2() {
   $("#clear-bg").checked = state.process.clear_background;
   $("#enclosed-bg").value = state.process.enclosed_background;
   $("#color-lock").checked = state.colorLock;
+  if (!state.paintHex || !state.palette.includes(state.paintHex)) {
+    state.paintHex = state.palette[0] || null;
+  }
   renderPaletteSwatches();
+  updatePaintUI();
   updateEnclosedEnabled();
   schedulePreview();
 }
@@ -225,9 +235,13 @@ $("#reset-colors").addEventListener("click", () => {
   if (!original.length) return;
   state.palette = original.slice();
   state.process.palette = state.palette.slice();
+  state.process.paint_fills = [];
+  state.paintHex = state.palette[0] || null;
+  state.paintErase = false;
   snapshotQuantizePalette(); // re-freeze to match the restored palette
   $("#ncolors-value").textContent = state.palette.length;
   renderPaletteSwatches();
+  updatePaintUI();
   updateNColorsButtons();
   schedulePreview();
 });
@@ -266,9 +280,13 @@ async function changeNColors(delta) {
     });
     state.palette = data.palette.slice();
     state.process.palette = state.palette.slice();
+    state.process.paint_fills = [];
+    state.paintHex = state.palette[0] || null;
+    state.paintErase = false;
     snapshotQuantizePalette(); // different cardinality can't reuse the old frozen labels
     $("#ncolors-value").textContent = state.palette.length;
     renderPaletteSwatches();
+    updatePaintUI();
     updateNColorsButtons();
     schedulePreview();
   } catch (err) {
@@ -307,6 +325,84 @@ function updateEnclosedEnabled() {
   $("#enclosed-bg").disabled = !state.process.clear_background;
 }
 
+function updatePaintUI() {
+  $("#preview-stage").classList.add("paint-cursor");
+  if (!state.paintErase && (!state.paintHex || !state.palette.includes(state.paintHex))) {
+    state.paintHex = state.palette[0] || null;
+  }
+  const wrap = $("#paint-swatches");
+  wrap.innerHTML = "";
+  state.palette.forEach((hex) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "paint-chip" + (!state.paintErase && hex === state.paintHex ? " selected" : "");
+    btn.style.background = hex;
+    btn.title = hex;
+    btn.addEventListener("click", () => {
+      state.paintErase = false;
+      state.paintHex = hex;
+      updatePaintUI();
+    });
+    wrap.appendChild(btn);
+  });
+  const eraseBtn = $("#paint-erase");
+  eraseBtn.classList.toggle("selected", state.paintErase);
+  const n = state.process.paint_fills.length;
+  $("#paint-undo").disabled = n === 0;
+  $("#paint-clear").disabled = n === 0;
+  $("#paint-count").textContent = n ? `${n} paint${n === 1 ? "" : "s"}` : "";
+}
+
+$("#paint-erase").addEventListener("click", () => {
+  state.paintErase = true;
+  updatePaintUI();
+});
+
+$("#paint-undo").addEventListener("click", () => {
+  if (!state.process.paint_fills.length) return;
+  state.process.paint_fills.pop();
+  updatePaintUI();
+  schedulePreview();
+});
+
+$("#paint-clear").addEventListener("click", () => {
+  if (!state.process.paint_fills.length) return;
+  state.process.paint_fills = [];
+  updatePaintUI();
+  schedulePreview();
+});
+
+function imagePixelFromClick(img, clientX, clientY) {
+  const rect = img.getBoundingClientRect();
+  const nw = img.naturalWidth;
+  const nh = img.naturalHeight;
+  if (!nw || !nh) return null;
+  const scale = Math.min(rect.width / nw, rect.height / nh);
+  const dispW = nw * scale;
+  const dispH = nh * scale;
+  const offX = (rect.width - dispW) / 2;
+  const offY = (rect.height - dispH) / 2;
+  const x = Math.floor((clientX - rect.left - offX) / scale);
+  const y = Math.floor((clientY - rect.top - offY) / scale);
+  if (x < 0 || y < 0 || x >= nw || y >= nh) return null;
+  return { x, y };
+}
+
+$("#preview-stage").addEventListener("click", (e) => {
+  if (!state.paintErase && !state.paintHex) return;
+  const img = $("#preview-img");
+  if (!img || img.hidden || !img.naturalWidth) return;
+  const pix = imagePixelFromClick(img, e.clientX, e.clientY);
+  if (!pix) return;
+  state.process.paint_fills.push({
+    x: pix.x,
+    y: pix.y,
+    to_hex: state.paintErase ? null : state.paintHex,
+  });
+  updatePaintUI();
+  schedulePreview();
+});
+
 function processParamsBody() {
   return {
     target_width_mm: state.process.target_width_mm,
@@ -319,6 +415,9 @@ function processParamsBody() {
     // swatch only recolors its region. Unlocked: null re-quantizes every edit.
     quantize_palette:
       state.colorLock && state.quantizePalette ? state.quantizePalette.slice() : null,
+    paint_fills: state.process.paint_fills.map((f) => ({
+      x: f.x, y: f.y, to_hex: f.to_hex,
+    })),
   };
 }
 
@@ -440,7 +539,6 @@ function buildScreen3() {
   $$("#mode-toggle .toggle-btn").forEach((b) =>
     b.classList.toggle("active", b.dataset.mode === state.extrude.mode));
   $("#layer-height").value = state.extrude.layer_height_mm;
-  $("#first-layer-height").value = state.extrude.first_layer_height_mm;
   $("#plate-enabled").checked = state.extrude.plate.enabled;
   $("#plate-thickness").value = state.extrude.plate.thickness_mm;
   $("#chamfer-enabled").checked = state.extrude.chamfer.enabled;
@@ -452,6 +550,7 @@ function buildScreen3() {
   $("#fin-angle").value = state.extrude.hang.fin_angle_deg;
   $("#fin-angle-val").textContent = state.extrude.hang.fin_angle_deg;
 
+  syncHeightInputSteps();
   renderColorHeights();
   renderBodyColor();
   updateModeVisibility();
@@ -459,24 +558,37 @@ function buildScreen3() {
   renderFilamentPanel();
 }
 
+function snapToLayerMultiple(value, lh, { allowZero = false } = {}) {
+  if (allowZero && (!(value > 0) || value < lh * 0.5)) return 0;
+  const n = Math.max(1, Math.round(value / lh));
+  return Math.round(n * lh * 1e9) / 1e9;
+}
+
+function syncHeightInputSteps() {
+  const lh = state.extrude.layer_height_mm;
+  const plate = $("#plate-thickness");
+  plate.step = lh;
+  plate.min = lh;
+  const lead = $("#initial-lead");
+  lead.step = lh;
+}
+
 function layerInfo(height) {
-  const layer = state.extrude.layer_height_mm;
-  const first = state.extrude.first_layer_height_mm;
-  const layers = Math.max(1, Math.round((height - first) / layer) + 1);
-  const snapped = first + (layers - 1) * layer;
-  return { layers, snapped };
+  const lh = state.extrude.layer_height_mm;
+  return snapZ(height, lh);
 }
 
 function renderColorHeights() {
   const wrap = $("#color-heights");
   wrap.innerHTML = "";
-  state.extrude.colors.forEach((c, i) => {
+  const lh = state.extrude.layer_height_mm;
+  state.extrude.colors.forEach((c) => {
     const { layers, snapped } = layerInfo(c.height_mm);
     const row = document.createElement("div");
     row.className = "ch-row";
     row.innerHTML = `
       <span class="ch-swatch" style="background:${c.hex}"></span>
-      <input type="number" min="0.01" step="0.1" value="${c.height_mm}" />
+      <input type="number" min="${lh}" step="${lh}" value="${c.height_mm}" />
       <span class="ch-layers">→ ${layers} layer${layers === 1 ? "" : "s"} (${snapped.toFixed(1)} mm)</span>
       <label class="ch-flo checkbox"><input type="checkbox" ${c.first_layer_only ? "checked" : ""} /> 1st layer only</label>`;
     const numInput = row.querySelector('input[type="number"]');
@@ -493,16 +605,6 @@ function renderColorHeights() {
     });
     chk.addEventListener("change", () => { c.first_layer_only = chk.checked; renderFilamentPanel(); });
     wrap.appendChild(row);
-  });
-}
-
-function refreshColorLayerLabels() {
-  const rows = $$("#color-heights .ch-row");
-  state.extrude.colors.forEach((c, i) => {
-    const info = layerInfo(c.height_mm);
-    const label = rows[i] && rows[i].querySelector(".ch-layers");
-    if (label) label.textContent =
-      `→ ${info.layers} layer${info.layers === 1 ? "" : "s"} (${info.snapped.toFixed(1)} mm)`;
   });
 }
 
@@ -583,16 +685,46 @@ $("#fin-angle").addEventListener("input", () => {
 });
 
 function updateHangVisibility() {
-  $("#fin-angle-field").hidden = state.extrude.hang.mode !== "fins";
+  const mode = state.extrude.hang.mode;
+  $("#fin-angle-field").hidden = mode !== "fins";
+  const hint = $("#hang-depth-hint");
+  const minDepth = hangMinDepthMm(mode);
+  if (minDepth == null) {
+    hint.hidden = true;
+    hint.textContent = "";
+    return;
+  }
+  hint.hidden = false;
+  const forWhat = mode === "keyhole" ? " (sized for a #6 pan-head / small nail)" : "";
+  hint.textContent =
+    `Needs ≥ ${minDepth.toFixed(1)} mm material depth at hang points ` +
+    `(plate + contiguous body above)${forWhat}.`;
+}
+
+// Mirrors app.core.hanging.keyhole_min_depth_mm / fins_min_depth_mm.
+function hangMinDepthMm(mode) {
+  if (mode === "keyhole") return 3.7 + 1.0; // KEYHOLE_TOTAL + SAFETY
+  if (mode === "fins") return 3.5 + 0.2 + 1.0; // TAB_REACH + CLEARANCE + MARGIN
+  return null;
 }
 
 $("#layer-height").addEventListener("input", () => {
   const v = parseFloat($("#layer-height").value);
-  if (!Number.isNaN(v) && v > 0) { state.extrude.layer_height_mm = v; refreshColorLayerLabels(); renderFilamentPanel(); }
-});
-$("#first-layer-height").addEventListener("input", () => {
-  const v = parseFloat($("#first-layer-height").value);
-  if (!Number.isNaN(v) && v > 0) { state.extrude.first_layer_height_mm = v; refreshColorLayerLabels(); renderFilamentPanel(); }
+  if (Number.isNaN(v) || v <= 0) return;
+  state.extrude.layer_height_mm = v;
+  const lh = v;
+  state.extrude.plate.thickness_mm = snapToLayerMultiple(state.extrude.plate.thickness_mm, lh);
+  state.extrude.initial_color_switch_mm = snapToLayerMultiple(
+    state.extrude.initial_color_switch_mm, lh, { allowZero: true }
+  );
+  state.extrude.colors.forEach((c) => {
+    c.height_mm = snapToLayerMultiple(c.height_mm, lh);
+  });
+  $("#plate-thickness").value = state.extrude.plate.thickness_mm;
+  $("#initial-lead").value = state.extrude.initial_color_switch_mm;
+  syncHeightInputSteps();
+  renderColorHeights();
+  renderFilamentPanel();
 });
 $("#plate-enabled").addEventListener("change", () => {
   state.extrude.plate.enabled = $("#plate-enabled").checked;
@@ -624,23 +756,23 @@ $("#initial-lead").addEventListener("input", () => {
 const PLAN_EPS = 1e-9;
 const round9 = (x) => Math.round(x * 1e9) / 1e9;
 
-function snapZ(z, lh, flh) {
-  const raw = (z - flh) / lh;
+function snapZ(z, lh) {
+  const raw = z / lh;
   let n = Math.floor(raw + 0.5 + PLAN_EPS);
-  if (n < 0) n = 0;
-  return { snapped: round9(flh + n * lh), layers: n + 1 };
+  if (n < 1) n = 1;
+  return { snapped: round9(n * lh), layers: n };
 }
 
-function colorTop(height, plateTop, plateEnabled, lh, flh) {
+function colorTop(height, plateTop, plateEnabled, lh) {
   if (plateEnabled) {
-    let { snapped: total, layers } = snapZ(plateTop + height, lh, flh);
+    let { snapped: total, layers } = snapZ(plateTop + height, lh);
     if (total <= plateTop + PLAN_EPS) {
       total = round9(plateTop + lh);
-      layers = snapZ(total, lh, flh).layers;
+      layers = snapZ(total, lh).layers;
     }
     return { top: total, layers, snappedRel: round9(total - plateTop) };
   }
-  const { snapped: total, layers } = snapZ(height, lh, flh);
+  const { snapped: total, layers } = snapZ(height, lh);
   return { top: total, layers, snappedRel: total };
 }
 
@@ -663,18 +795,17 @@ function visibleColorsForPlan() {
 
 function computePlan(extrude, visibleColors) {
   const lh = extrude.layer_height_mm;
-  const flh = extrude.first_layer_height_mm;
   const body = extrude.main_body_color;
   const plateEnabled = extrude.plate.enabled;
-  const plan = { bands: [], events: [], snappedHeights: {}, warnings: [], nSwaps: 0, plateTop: 0, tops: {}, flh };
+  const plan = { bands: [], events: [], snappedHeights: {}, warnings: [], nSwaps: 0, plateTop: 0, tops: {}, flh: lh };
 
   let plateTop = 0;
-  if (plateEnabled) plateTop = snapZ(extrude.plate.thickness_mm, lh, flh).snapped;
+  if (plateEnabled) plateTop = snapZ(extrude.plate.thickness_mm, lh).snapped;
   plan.plateTop = plateTop;
 
   const tops = {};
   for (const c of visibleColors) {
-    const { top, layers, snappedRel } = colorTop(c.height_mm, plateTop, plateEnabled, lh, flh);
+    const { top, layers, snappedRel } = colorTop(c.height_mm, plateTop, plateEnabled, lh);
     plan.snappedHeights[c.hex] = { requested: c.height_mm, snapped: snappedRel, layers };
     if (!c.first_layer_only) tops[c.hex] = top;
   }
@@ -703,52 +834,85 @@ function computePlan(extrude, visibleColors) {
   }
 
   let bands = [];
+  const groupZ0 = groups.map(() => null);
   if (!groups.length) {
-    bands.push({ z0: 0, z1: Math.max(plateTop, flh), hexes: [body] });
+    bands.push({ z0: 0, z1: Math.max(plateTop, lh), hexes: [body] });
   } else {
     let firstForeign = null;
     for (let gi = 0; gi < groups.length; gi++) {
-      if (groups[gi][0].hex !== body) { firstForeign = gi; break; }
+      if (groups[gi].some((c) => c.hex !== body)) { firstForeign = gi; break; }
     }
     if (firstForeign === null) {
       bands.push({ z0: 0, z1: tops[groups[groups.length - 1][0].hex], hexes: [body] });
+      for (let gi = 0; gi < groups.length; gi++)
+        groupZ0[gi] = gi === 0 ? 0 : tops[groups[gi - 1][0].hex];
     } else {
       const tF = tops[groups[firstForeign][0].hex];
       const lead = extrude.initial_color_switch_mm;
-      let swap1 = snapZ(tF - lead, lh, flh).snapped;
+      let swap1 = snapZ(tF - lead, lh).snapped;
       let clamped = false;
-      if (tF - lead < flh - PLAN_EPS || swap1 < flh - PLAN_EPS) { swap1 = flh; clamped = true; }
-      if (swap1 >= tF - PLAN_EPS) { swap1 = Math.max(flh, round9(tF - lh)); clamped = true; }
+      if (tF - lead < lh - PLAN_EPS || swap1 < lh - PLAN_EPS) { swap1 = lh; clamped = true; }
+      if (swap1 >= tF - PLAN_EPS) { swap1 = Math.max(lh, round9(tF - lh)); clamped = true; }
       if (clamped) plan.warnings.push({ code: "lead_clamped", msg: "initial color-switch lead clamped to fit within the model" });
       bands.push({ z0: 0, z1: swap1, hexes: [body] });
       let prev = swap1;
       for (let gi = firstForeign; gi < groups.length; gi++) {
+        groupZ0[gi] = prev;
         bands.push({ z0: prev, z1: tops[groups[gi][0].hex], hexes: groups[gi].map((c) => c.hex) });
         prev = tops[groups[gi][0].hex];
       }
+      for (let gi = 0; gi < firstForeign; gi++)
+        groupZ0[gi] = gi === 0 ? 0 : tops[groups[gi - 1][0].hex];
     }
   }
 
+  // Merge only pure single-color runs so sibling stripes keep their true z0.
   const merged = [];
   for (const b of bands) {
     const last = merged[merged.length - 1];
-    if (last && last.hexes[0] === b.hexes[0]) {
+    if (
+      last &&
+      last.hexes.length === 1 &&
+      b.hexes.length === 1 &&
+      last.hexes[0] === b.hexes[0]
+    ) {
       last.z1 = b.z1;
-      for (const h of b.hexes) if (!last.hexes.includes(h)) last.hexes.push(h);
-    } else merged.push({ z0: b.z0, z1: b.z1, hexes: b.hexes.slice() });
+    } else {
+      merged.push({ z0: b.z0, z1: b.z1, hexes: b.hexes.slice() });
+    }
   }
   plan.bands = merged;
 
   for (let i = 1; i < merged.length; i++) {
     const z = merged[i].z0;
-    plan.events.push({ z_mm: z, layer: snapZ(z, lh, flh).layers, from: merged[i - 1].hexes[0], to: merged[i].hexes[0] });
+    // Band-boundary events use the dominant (first) hex of each segment.
+    if (merged[i - 1].hexes[0] !== merged[i].hexes[0]) {
+      plan.events.push({
+        z_mm: z,
+        layer: snapZ(z, lh).layers,
+        from: merged[i - 1].hexes[0],
+        to: merged[i].hexes[0],
+      });
+    }
   }
 
-  const siblingExtra = groups.reduce((s, g) => s + g.length - 1, 0);
+  plan.siblingSpans = [];
+  for (let gi = 0; gi < groups.length; gi++) {
+    const g = groups[gi];
+    if (g.length < 2 || groupZ0[gi] == null) continue;
+    const z0 = groupZ0[gi];
+    const z1 = tops[g[0].hex];
+    const hexes = g.map((c) => c.hex);
+    plan.siblingSpans.push({ z0, z1, hexes });
+    const layer = snapZ(z0, lh).layers;
+    for (let i = 1; i < hexes.length; i++)
+      plan.events.push({ z_mm: z0, layer, from: hexes[0], to: hexes[i] });
+  }
+
+  plan.events.sort((a, b) => (a.z_mm - b.z_mm) || a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
   const floNonbody = [...new Set(flo.filter((c) => c.hex !== body).map((c) => c.hex))];
   plan.floNonbody = floNonbody;
-  const floExtra = floNonbody.length ? floNonbody.length + 1 : 0;
-  plan.nSwaps = plan.events.length + siblingExtra + floExtra;
+  plan.nSwaps = plan.events.length;
   return plan;
 }
 
@@ -791,6 +955,14 @@ function renderFilamentPanel() {
   const bands = plan.bands;
   headline.textContent = `${plan.nSwaps} color switch${plan.nSwaps === 1 ? "" : "es"}`;
   if (!bands.length) { bar.innerHTML = `<div class="fbar-empty">No plan yet</div>`; return; }
+
+  if (plan.siblingSpans && plan.siblingSpans.length) {
+    const n = plan.siblingSpans.reduce((s, sp) => s + sp.hexes.length - 1, 0);
+    note.textContent =
+      `${n} mid-layer swap${n === 1 ? "" : "s"} for equal-height colors ` +
+      `(striped segments on the bar).`;
+    note.hidden = false;
+  }
 
   const total = bands[bands.length - 1].z1 || plan.flh;
   const boundaries = new Set([0]);
@@ -903,7 +1075,6 @@ function extrudeStateForPlan() {
   return {
     mode: state.extrude.mode,
     layer_height_mm: state.extrude.layer_height_mm,
-    first_layer_height_mm: state.extrude.first_layer_height_mm,
     plate: { enabled: state.extrude.plate.enabled, thickness_mm: state.extrude.plate.thickness_mm },
     main_body_color: state.extrude.main_body_color,
     initial_color_switch_mm: state.extrude.initial_color_switch_mm,
@@ -914,7 +1085,6 @@ function extrudeParamsBody() {
   return {
     mode: state.extrude.mode,
     layer_height_mm: state.extrude.layer_height_mm,
-    first_layer_height_mm: state.extrude.first_layer_height_mm,
     plate: {
       enabled: state.extrude.plate.enabled,
       thickness_mm: state.extrude.plate.thickness_mm,
@@ -1030,6 +1200,15 @@ function renderScreen4() {
   // Downloads
   $("#dl-3mf").href = m.downloads.threemf;
   $("#dl-png").href = m.downloads.png;
+  $("#dl-zip").href = m.downloads.zip;
+  const dlFins = $("#dl-fins");
+  if (m.downloads.fins_threemf) {
+    dlFins.href = m.downloads.fins_threemf;
+    dlFins.hidden = false;
+  } else {
+    dlFins.removeAttribute("href");
+    dlFins.hidden = true;
+  }
 
   loadViewer(m.preview_glb);
 }

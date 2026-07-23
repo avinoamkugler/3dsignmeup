@@ -104,7 +104,6 @@ def _model_request(mode: str) -> dict:
         "extrude": {
             "mode": mode,
             "layer_height_mm": 0.2,
-            "first_layer_height_mm": 0.2,
             "plate": {"enabled": True, "thickness_mm": 1.2},
             "main_body_color": "#e63946",
             "colors": [
@@ -175,6 +174,15 @@ def test_model_and_downloads(client, session, mode):
     prev = client.post(f"/api/sessions/{sid}/preview", json=PROCESS).json()
     prev_bytes = client.get(prev["preview_png"]).content
     assert png.content == prev_bytes
+
+    zipped = client.get(model["downloads"]["zip"])
+    assert zipped.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(zipped.content)) as z:
+        names = set(z.namelist())
+        assert {"sign.3mf", "clean.png"} <= names
+        assert z.read("sign.3mf") == threemf.content
+        assert z.read("clean.png") == png.content
+        assert z.testzip() is None
 
 
 def test_meshes_watertight(client, session):
