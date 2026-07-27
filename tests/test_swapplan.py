@@ -219,6 +219,19 @@ def test_ams_within_slots_no_warning():
     assert not any(w["code"] == "ams_slots" for w in plan.warnings)
 
 
+def test_swap_mode_no_ams_slot_warning():
+    colors = [
+        ColorSpec(hex="#111111", height_mm=2.0),
+        ColorSpec(hex="#222222", height_mm=2.0),
+        ColorSpec(hex="#333333", height_mm=2.0),
+        ColorSpec(hex="#444444", height_mm=2.0),
+    ]
+    plan = compute_plan(
+        _extrude(mode="swap", colors=colors, body="#ff0000"), colors
+    )
+    assert not any(w["code"] == "ams_slots" for w in plan.warnings)
+
+
 def test_lead_clamped_warning():
     # Lead larger than the color's height forces a clamp.
     G = "#00ff00"

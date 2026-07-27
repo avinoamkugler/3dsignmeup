@@ -814,10 +814,11 @@ function computePlan(extrude, visibleColors) {
   const filaments = new Set(visibleColors.map((c) => c.hex));
   filaments.add(body);
   plan.filamentCount = filaments.size;
-  if (filaments.size > 4)
-    plan.warnings.push({ code: "ams_slots", msg: `${filaments.size} colors incl. body exceeds AMS lite's 4 slots` });
-
-  if (extrude.mode === "ams") return plan;
+  if (extrude.mode === "ams") {
+    if (filaments.size > 4)
+      plan.warnings.push({ code: "ams_slots", msg: `${filaments.size} colors incl. body exceeds AMS lite's 4 slots` });
+    return plan;
+  }
 
   const nonflo = visibleColors.filter((c) => !c.first_layer_only);
   const flo = visibleColors.filter((c) => c.first_layer_only);

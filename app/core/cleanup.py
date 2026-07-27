@@ -149,9 +149,12 @@ def apply_paint_fills(
     """Apply ordered paint-bucket ops: each floods one connected component.
 
     Each fill is ``(x, y, to_hex)`` in image space (row 0 = top). ``to_hex``
-    null means erase to TRANSPARENT (through-hole in art and plate). Only
-    solid palette pixels (label >= 0) are fillable. Painted body-fill pixels
-    lose their body-fill flag.
+    null means erase to TRANSPARENT (through-hole in art and plate). Palette
+    colors, HOLE_PLATE, and TRANSPARENT are all fillable so enclosed holes
+    (e.g. white letterforms that matched the cleared background) can be
+    restored. Painting a body-fill region with its own display color clears
+    the body-fill flag, promoting it to a real palette color. Other painted
+    body-fill pixels also lose the flag.
     """
     if not paint_fills:
         return labels, body_fill_mask
@@ -163,19 +166,24 @@ def apply_paint_fills(
         if x < 0 or y < 0 or x >= w or y >= h:
             continue
         src = int(out[y, x])
-        if src < 0:
-            continue
         if to_hex is None:
+            if src == TRANSPARENT:
+                continue
             to_idx = None
         else:
             to_idx = hex_to_idx.get(to_hex)
-            if to_idx is None or src == to_idx:
+            if to_idx is None:
                 continue
         cc = cc_label(out == src, connectivity=1)
         cid = int(cc[y, x])
         if cid == 0:
             continue
         region = cc == cid
+        if to_idx is not None and src == to_idx:
+            if not bf[region].any():
+                continue
+            bf[region] = False
+            continue
         if to_hex is None:
             out[region] = TRANSPARENT
         else:

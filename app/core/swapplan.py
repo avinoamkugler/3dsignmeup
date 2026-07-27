@@ -134,17 +134,15 @@ def compute_plan(extrude: ExtrudeParams, visible_colors: list[ColorSpec]) -> Pla
         if not c.first_layer_only:
             tops[c.hex] = top
 
-    # --- AMS-slot warning (applies in both modes) --------------------------
-    filaments = {c.hex for c in visible_colors} | {body}
-    if len(filaments) > 4:
-        plan.warnings.append(
-            {
-                "code": "ams_slots",
-                "msg": f"{len(filaments)} colors incl. body exceeds AMS lite's 4 slots",
-            }
-        )
-
     if extrude.mode == "ams":
+        filaments = {c.hex for c in visible_colors} | {body}
+        if len(filaments) > 4:
+            plan.warnings.append(
+                {
+                    "code": "ams_slots",
+                    "msg": f"{len(filaments)} colors incl. body exceeds AMS lite's 4 slots",
+                }
+            )
         return plan
 
     # ----------------------------- swap mode -------------------------------

@@ -169,7 +169,7 @@ def test_paint_fill_recolors_one_connected_component():
     assert (res.labels[5:15, 40:50] == 1).all()
 
 
-def test_paint_fill_skips_transparent():
+def test_paint_fill_recolors_transparent_component():
     labels = np.full((20, 20), TRANSPARENT, np.int16)
     labels[5:15, 5:15] = 0
     res = run_cleanup(
@@ -177,8 +177,9 @@ def test_paint_fill_skips_transparent():
         clear_background=False, enclosed_background="plate",
         paint_fills=[(0, 0, "#e63946")],
     )
-    assert res.labels[0, 0] == TRANSPARENT
+    assert res.labels[0, 0] == 1
     assert (res.labels[5:15, 5:15] == 0).all()
+    assert (res.labels[0:5, :] == 1).all()
 
 
 def test_paint_fills_apply_in_order():
@@ -218,4 +219,38 @@ def test_paint_erase_cuts_plate_even_when_enclosed_is_plate():
     )
     assert (res.labels[5:25, 5:25] == TRANSPARENT).all()
     assert not (res.labels == HOLE_PLATE).any()
+
+
+def test_paint_restores_hole_plate_to_palette_color():
+    labels = _o_shape()
+    res = run_cleanup(
+        labels, PAL2, mm_per_px=0.2, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="plate",
+        paint_fills=[(60, 60, "#ffffff")],
+    )
+    assert res.labels[60, 60] == 1
+    assert (res.labels[50:70, 50:70] == 1).any()
+    assert not res.body_fill_mask[60, 60]
+
+
+def test_paint_restores_through_hole_to_palette_color():
+    labels = _o_shape()
+    res = run_cleanup(
+        labels, PAL2, mm_per_px=0.2, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="through_hole",
+        paint_fills=[(60, 60, "#000000")],
+    )
+    assert res.labels[60, 60] == 0
+    assert (res.labels[55:65, 55:65] == 0).all()
+
+
+def test_paint_same_color_promotes_body_fill_to_real_color():
+    labels = _o_shape()
+    res = run_cleanup(
+        labels, PAL2, mm_per_px=0.2, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="fill",
+        paint_fills=[(60, 60, "#ffffff")],
+    )
+    assert res.labels[60, 60] == 1
+    assert not res.body_fill_mask[60, 60]
 
