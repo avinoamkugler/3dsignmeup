@@ -300,6 +300,7 @@ KEYHOLE_SLOT_WIDTH_MM = 4.0
 KEYHOLE_LAYER1_DEPTH_MM = 1.2
 KEYHOLE_LAYER2_DEPTH_MM = 2.5
 KEYHOLE_TOTAL_DEPTH_MM = KEYHOLE_LAYER1_DEPTH_MM + KEYHOLE_LAYER2_DEPTH_MM
+KEYHOLE_MIN_TOTAL_DEPTH_MM = 2.5  # shallowest still-usable keyhole (adaptive floor)
 SAFETY_MARGIN_MM = 1.0
 KEYHOLE_FILLET_MM = 0.4
 KEYHOLE_Y_FRAC = 0.75
@@ -324,6 +325,7 @@ FIN_TAB_SPACING_MM = 8.0   # tab center-to-center across FIN_WIDTH_MM
 FIN_TAB_BASE_MM = 4.0      # each tab's width along that same axis
 FIN_TAB_HEIGHT_MM = 4.0    # tab height range on the mounting-pad wall
 FIN_TAB_REACH_MM = 3.5     # max protrusion from the wall (< height -> <=45deg)
+FIN_TAB_MIN_REACH_MM = 2.0  # shallowest still-usable tab reach (adaptive floor)
 FIN_TAB_CLEARANCE_MM = 0.2  # gap for a press fit
 FIN_X_FRAC = 0.125
 FIN_MARGIN_MM = 1.0
@@ -429,30 +431,33 @@ def _keyhole_layer2(cx: float, cy: float) -> Polygon:
     return scale(circle, KEYHOLE_WIDTH_MM / 2, KEYHOLE_LENGTH_MM / 2)
 
 
-def _keyhole_cuts(cx: float, cy: float) -> list[HangCut]:
+def _keyhole_cuts(cx: float, cy: float, total_depth_mm: float | None = None) -> list[HangCut]:
     """Stacked back-surface cuts with graduated fillet transitions.
 
-    Z layout (from the bed up), driven by the KEYHOLE_*_DEPTH constants:
+    Z layout (from the bed up), driven by the KEYHOLE_*_DEPTH constants
+    (optionally scaled when ``total_depth_mm`` is below the nominal total):
       [0, fillet]              entry countersink: layer1 buffered +FILLET -> layer1
       [fillet, layer1]         the true keyhole silhouette (layer1)
       [layer1, layer1+fillet]  blend layer1 out to the layer2 oval pocket
       [layer1+fillet, TOTAL]  the layer2 oval pocket
     """
+    total = KEYHOLE_TOTAL_DEPTH_MM if total_depth_mm is None else total_depth_mm
+    scale = total / KEYHOLE_TOTAL_DEPTH_MM
     layer1 = _keyhole_layer1(cx, cy)
     layer2 = _keyhole_layer2(cx, cy)
     cuts: list[HangCut] = []
 
-    fillet = KEYHOLE_FILLET_MM
-    layer1_z = KEYHOLE_LAYER1_DEPTH_MM
+    fillet = min(KEYHOLE_FILLET_MM * scale, total * 0.2)
+    layer1_z = KEYHOLE_LAYER1_DEPTH_MM * scale
     blend_lo = layer1_z
-    blend_hi = min(layer1_z + fillet, KEYHOLE_TOTAL_DEPTH_MM)
+    blend_hi = min(layer1_z + fillet, total)
 
     n_entry = 2
-    dz = fillet / n_entry
+    dz = fillet / n_entry if fillet > _EPS else 0.0
     for i in range(n_entry):
         z0 = round(i * dz, 9)
         z1 = round((i + 1) * dz, 9)
-        amt = fillet * (1.0 - z0 / fillet)
+        amt = fillet * (1.0 - z0 / fillet) if fillet > _EPS else 0.0
         prof = layer1.buffer(amt) if amt > _EPS else layer1
         cuts.append(HangCut(z0, z1, _as_mp(prof)))
 
@@ -460,7 +465,7 @@ def _keyhole_cuts(cx: float, cy: float) -> list[HangCut]:
 
     n_blend = 6
     shrink = KEYHOLE_LENGTH_MM / 2
-    dzb = (blend_hi - blend_lo) / n_blend
+    dzb = (blend_hi - blend_lo) / n_blend if blend_hi > blend_lo else 0.0
     for i in range(n_blend):
         z0 = round(blend_lo + i * dzb, 9)
         z1 = round(blend_lo + (i + 1) * dzb, 9)
@@ -469,8 +474,8 @@ def _keyhole_cuts(cx: float, cy: float) -> list[HangCut]:
         prof = unary_union([layer1, pocket]) if not pocket.is_empty else layer1
         cuts.append(HangCut(z0, z1, _as_mp(prof)))
 
-    if blend_hi < KEYHOLE_TOTAL_DEPTH_MM - _EPS:
-        cuts.append(HangCut(round(blend_hi, 9), KEYHOLE_TOTAL_DEPTH_MM, _as_mp(layer2)))
+    if blend_hi < total - _EPS:
+        cuts.append(HangCut(round(blend_hi, 9), round(total, 9), _as_mp(layer2)))
     return cuts
 
 
@@ -522,7 +527,7 @@ def _extrude_profile(profile: Polygon, width: float) -> trimesh.Trimesh:
     return prism
 
 
-def _build_fin_mesh(angle_deg: float):
+def _build_fin_mesh(angle_deg: float, tab_reach_mm: float | None = None):
     """Build one v3 fin in its own mesh frame (which IS the assembled world
     side-view frame): mesh X = width (Xf), mesh Y = Uf (world-horizontal),
     mesh Z = Vf (world-vertical, foot at Z=0).
@@ -544,6 +549,7 @@ def _build_fin_mesh(angle_deg: float):
 
     Returns (mesh, strut_len_mm).
     """
+    reach = FIN_TAB_REACH_MM if tab_reach_mm is None else tab_reach_mm
     strut_len = _fin_strut_len_mm(angle_deg)
     setback = _fin_setback_mm(angle_deg)
     half_t = FIN_STRUT_THICKNESS_MM / 2
@@ -569,7 +575,7 @@ def _build_fin_mesh(angle_deg: float):
     # 3. MOUNTING PAD + 2 TABS — built in its own local (Uf, Vf) frame with
     # origin at the bottom-center of the wall's outward (tab) face (Uf=0).
     # The wall body sits on the +Uf side; tabs protrude toward -Uf, reaching
-    # full FIN_TAB_REACH_MM only at the top of their height range (v2 ramp).
+    # full ``reach`` only at the top of their height range (v2 ramp).
     pad_meshes = []
     wall2d = box(0.0, 0.0, _FIN_PAD_WALL_MM, _FIN_PAD_HEIGHT_MM)
     pad_meshes.append(_extrude_profile(wall2d, FIN_WIDTH_MM))
@@ -581,7 +587,7 @@ def _build_fin_mesh(angle_deg: float):
             [
                 (0.0, tab_bot),
                 (0.0, tab_top),
-                (-FIN_TAB_REACH_MM, tab_top),
+                (-reach, tab_top),
             ]
         )
         prism = _extrude_profile(tab2d, FIN_TAB_BASE_MM)
@@ -620,7 +626,9 @@ def _fin_footprint(ax: float, ay: float) -> Polygon:
     )
 
 
-def _fin_tab_cuts(ax: float, ay: float) -> list[HangCut]:
+def _fin_tab_cuts(
+    ax: float, ay: float, tab_reach_mm: float | None = None
+) -> list[HangCut]:
     """Tapered tab pockets for a fin anchored at (ax, ay), as a stack of
     shrinking rectangles (the dual of the tab wedge).
 
@@ -631,9 +639,10 @@ def _fin_tab_cuts(ax: float, ay: float) -> list[HangCut]:
     the top (at the deepest point). Approximated with 6 Z-sub-slices, each a
     rectangle FIN_TAB_BASE_MM+clearance wide in X, using the shallow (wider)
     edge of each slice so the pocket enclosingly contains the tab. Active in
-    Z in [0, FIN_TAB_REACH_MM + FIN_TAB_CLEARANCE_MM).
+    Z in [0, reach + FIN_TAB_CLEARANCE_MM).
     """
-    depth = FIN_TAB_REACH_MM + FIN_TAB_CLEARANCE_MM
+    reach = FIN_TAB_REACH_MM if tab_reach_mm is None else tab_reach_mm
+    depth = reach + FIN_TAB_CLEARANCE_MM
     n = 6
     dz = depth / n
     x_hw = (FIN_TAB_BASE_MM + FIN_TAB_CLEARANCE_MM) / 2
@@ -644,7 +653,7 @@ def _fin_tab_cuts(ax: float, ay: float) -> list[HangCut]:
         z0 = round(i * dz, 9)
         z1 = round((i + 1) * dz, 9)
         # Shallow (widest) edge of the slice -> lowest Y threshold in it.
-        frac = min(z0 / FIN_TAB_REACH_MM, 1.0)
+        frac = min(z0 / reach, 1.0) if reach > _EPS else 1.0
         y_lo = ay - FIN_TAB_HEIGHT_MM / 2 + frac * FIN_TAB_HEIGHT_MM
         rects = [box(tx - x_hw, y_lo, tx + x_hw, y_top) for tx in tab_xs]
         cuts.append(HangCut(z0, z1, _as_mp(unary_union(rects))))
@@ -652,10 +661,18 @@ def _fin_tab_cuts(ax: float, ay: float) -> list[HangCut]:
 
 
 def keyhole_min_depth_mm() -> float:
+    return KEYHOLE_MIN_TOTAL_DEPTH_MM + SAFETY_MARGIN_MM
+
+
+def keyhole_nominal_depth_mm() -> float:
     return KEYHOLE_TOTAL_DEPTH_MM + SAFETY_MARGIN_MM
 
 
 def fins_min_depth_mm() -> float:
+    return FIN_TAB_MIN_REACH_MM + FIN_TAB_CLEARANCE_MM + FIN_MARGIN_MM
+
+
+def fins_nominal_depth_mm() -> float:
     return FIN_TAB_REACH_MM + FIN_TAB_CLEARANCE_MM + FIN_MARGIN_MM
 
 
@@ -665,6 +682,30 @@ def hang_min_depth_mm(mode: str) -> float | None:
     if mode == "fins":
         return fins_min_depth_mm()
     return None
+
+
+def _keyhole_cavity_depth(ceiling: float) -> float | None:
+    usable = ceiling - SAFETY_MARGIN_MM
+    if usable < KEYHOLE_MIN_TOTAL_DEPTH_MM - _EPS:
+        return None
+    return min(KEYHOLE_TOTAL_DEPTH_MM, usable)
+
+
+def _fin_tab_reach_for_ceiling(ceiling: float) -> float | None:
+    usable = ceiling - FIN_MARGIN_MM - FIN_TAB_CLEARANCE_MM
+    if usable < FIN_TAB_MIN_REACH_MM - _EPS:
+        return None
+    return min(FIN_TAB_REACH_MM, usable)
+
+
+def _maybe_warn_adapted(plan: HangPlan, kind: str, used: float, nominal: float) -> None:
+    if used < nominal - _EPS:
+        plan.warnings.append(
+            {
+                "code": "hang_depth_adapted",
+                "msg": f"{kind} depth reduced to {used:.1f} mm to fit available material",
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -709,7 +750,6 @@ def _plan_keyhole(
     model_top: float,
 ) -> None:
     w, h = art.width_mm, art.height_mm
-    need = keyhole_min_depth_mm()
     cy = KEYHOLE_Y_FRAC * h
     lx = KEYHOLE_X_FRAC * w
     rx = w - lx
@@ -717,23 +757,29 @@ def _plan_keyhole(
     left_fp = _keyhole_footprint(lx, cy)
     right_fp = _keyhole_footprint(rx, cy)
 
-    def ok(fp) -> tuple[bool, bool]:
-        return _fits(fp, w, h, EDGE_MARGIN_MM), _ceiling(fp, tops, regions, model_top) >= need - _EPS
+    def fit_and_depth(fp) -> tuple[bool, float | None]:
+        if not _fits(fp, w, h, EDGE_MARGIN_MM):
+            return False, None
+        return True, _keyhole_cavity_depth(_ceiling(fp, tops, regions, model_top))
 
-    lf, ld = ok(left_fp)
-    rf, rd = ok(right_fp)
+    lf, ld = fit_and_depth(left_fp)
+    rf, rd = fit_and_depth(right_fp)
     disjoint = not left_fp.intersects(right_fp)
 
-    if lf and rf and ld and rd and disjoint:
-        plan.cuts.extend(_keyhole_cuts(lx, cy))
-        plan.cuts.extend(_keyhole_cuts(rx, cy))
+    def place(xs: list[float], total: float) -> None:
+        for x in xs:
+            plan.cuts.extend(_keyhole_cuts(x, cy, total_depth_mm=total))
+        _maybe_warn_adapted(plan, "keyhole", total, KEYHOLE_TOTAL_DEPTH_MM)
+
+    if lf and rf and ld is not None and rd is not None and disjoint:
+        place([lx, rx], min(ld, rd))
         return
 
     cx = w / 2
     center_fp = _keyhole_footprint(cx, cy)
-    cf, cd = ok(center_fp)
-    if cf and cd:
-        plan.cuts.extend(_keyhole_cuts(cx, cy))
+    cf, cd = fit_and_depth(center_fp)
+    if cf and cd is not None:
+        place([cx], cd)
         reason = "too small for two keyholes" if not (lf and rf and disjoint) else "not enough depth for two keyholes"
         plan.warnings.append(
             {"code": "hang_fallback_single", "msg": f"placed one centered keyhole ({reason})"}
@@ -753,7 +799,6 @@ def _plan_fins(
     model_top: float,
 ) -> None:
     w, h = art.width_mm, art.height_mm
-    need = fins_min_depth_mm()
     ay = FIN_ANCHOR_HEIGHT_MM
     lx = FIN_X_FRAC * w
     rx = w - lx
@@ -761,11 +806,13 @@ def _plan_fins(
     left_fp = _fin_footprint(lx, ay)
     right_fp = _fin_footprint(rx, ay)
 
-    def ok(fp) -> tuple[bool, bool]:
-        return _fits(fp, w, h, EDGE_MARGIN_MM), _ceiling(fp, tops, regions, model_top) >= need - _EPS
+    def fit_and_reach(fp) -> tuple[bool, float | None]:
+        if not _fits(fp, w, h, EDGE_MARGIN_MM):
+            return False, None
+        return True, _fin_tab_reach_for_ceiling(_ceiling(fp, tops, regions, model_top))
 
-    lf, ld = ok(left_fp)
-    rf, rd = ok(right_fp)
+    lf, lr = fit_and_reach(left_fp)
+    rf, rr = fit_and_reach(right_fp)
     disjoint = not left_fp.intersects(right_fp)
 
     angle = extrude.hang.fin_angle_deg
@@ -774,23 +821,24 @@ def _plan_fins(
     gap = 5.0
     color = extrude.main_body_color
 
-    def place(anchor_x: float, name: str, part_index: int) -> None:
-        plan.cuts.extend(_fin_tab_cuts(anchor_x, ay))
-        mesh, leg = _build_fin_mesh(angle)
-        ox = bx1 + gap + part_index * (FIN_WIDTH_MM + gap)
-        mesh.apply_translation([ox, by0, 0.0])
-        plan.extra_parts.append(Part(name=name, color=color, mesh=mesh))
+    def place(anchors: list[tuple[float, str]], reach: float) -> None:
+        for part_index, (anchor_x, name) in enumerate(anchors):
+            plan.cuts.extend(_fin_tab_cuts(anchor_x, ay, tab_reach_mm=reach))
+            mesh, _leg = _build_fin_mesh(angle, tab_reach_mm=reach)
+            ox = bx1 + gap + part_index * (FIN_WIDTH_MM + gap)
+            mesh.apply_translation([ox, by0, 0.0])
+            plan.extra_parts.append(Part(name=name, color=color, mesh=mesh))
+        _maybe_warn_adapted(plan, "fin tab", reach, FIN_TAB_REACH_MM)
 
-    if lf and rf and ld and rd and disjoint:
-        place(lx, "fin_left", 0)
-        place(rx, "fin_right", 1)
+    if lf and rf and lr is not None and rr is not None and disjoint:
+        place([(lx, "fin_left"), (rx, "fin_right")], min(lr, rr))
         return
 
     cx = w / 2
     center_fp = _fin_footprint(cx, ay)
-    cf, cd = ok(center_fp)
-    if cf and cd:
-        place(cx, "fin_center", 0)
+    cf, cr = fit_and_reach(center_fp)
+    if cf and cr is not None:
+        place([(cx, "fin_center")], cr)
         reason = "too small for two fins" if not (lf and rf and disjoint) else "not enough depth for two fins"
         plan.warnings.append(
             {"code": "hang_fallback_single", "msg": f"placed one centered fin ({reason})"}
@@ -799,7 +847,6 @@ def _plan_fins(
 
     reason = "fin tabs do not fit within the sign" if not cf else "not enough material depth for fin tabs"
     plan.warnings.append({"code": "hang_skipped", "msg": f"wall-hanging skipped: {reason}"})
-
 
 # ---------------------------------------------------------------------------
 # Integration into geometry.py (do this as part of this task — it's the only

@@ -165,9 +165,9 @@ def test_keyhole_skipped_too_small():
 
 
 def test_keyhole_skipped_insufficient_depth():
-    # Plenty of room in XY, but the whole model is too thin for cavity + safety.
+    # Plenty of room in XY, but thinner than the adaptive floor + safety.
     art = _art(100, 100)
-    shallow = hanging.KEYHOLE_TOTAL_DEPTH_MM  # < depth + SAFETY_MARGIN
+    shallow = hanging.KEYHOLE_MIN_TOTAL_DEPTH_MM  # < min cavity + SAFETY_MARGIN
     plan = _plan(art, _extrude("keyhole"), tops={}, regions={}, model_top=shallow)
     assert plan.cuts == []
     assert [w["code"] for w in plan.warnings] == ["hang_skipped"]
@@ -176,14 +176,32 @@ def test_keyhole_skipped_insufficient_depth():
 
 def test_keyhole_min_depth_matches_placement_need():
     assert hanging.keyhole_min_depth_mm() == pytest.approx(
+        hanging.KEYHOLE_MIN_TOTAL_DEPTH_MM + hanging.SAFETY_MARGIN_MM
+    )
+    assert hanging.keyhole_nominal_depth_mm() == pytest.approx(
         hanging.KEYHOLE_TOTAL_DEPTH_MM + hanging.SAFETY_MARGIN_MM
     )
     assert hanging.fins_min_depth_mm() == pytest.approx(
+        hanging.FIN_TAB_MIN_REACH_MM + hanging.FIN_TAB_CLEARANCE_MM + hanging.FIN_MARGIN_MM
+    )
+    assert hanging.fins_nominal_depth_mm() == pytest.approx(
         hanging.FIN_TAB_REACH_MM + hanging.FIN_TAB_CLEARANCE_MM + hanging.FIN_MARGIN_MM
     )
     assert hanging.hang_min_depth_mm("keyhole") == hanging.keyhole_min_depth_mm()
     assert hanging.hang_min_depth_mm("fins") == hanging.fins_min_depth_mm()
     assert hanging.hang_min_depth_mm("none") is None
+
+
+def test_keyhole_adapts_depth_to_thin_model():
+    art = _art(100, 100)
+    # Ceiling between adaptive floor and nominal: usable = 3.0mm cavity.
+    ceiling = hanging.KEYHOLE_MIN_TOTAL_DEPTH_MM + hanging.SAFETY_MARGIN_MM + 0.5
+    plan = _plan(art, _extrude("keyhole"), tops={}, regions={}, model_top=ceiling)
+    assert plan.cuts
+    z1 = max(c.z1_mm for c in plan.cuts)
+    assert z1 == pytest.approx(ceiling - hanging.SAFETY_MARGIN_MM)
+    assert z1 < hanging.KEYHOLE_TOTAL_DEPTH_MM
+    assert any(w["code"] == "hang_depth_adapted" for w in plan.warnings)
 
 
 def test_keyhole_depth_excludes_overlapping_color_region():
@@ -373,9 +391,27 @@ def test_fins_fallback_single_center():
 
 def test_fins_skipped_insufficient_depth():
     art = _art(100, 100)
-    # less than FIN_TAB_REACH + FIN_TAB_CLEARANCE + FIN_MARGIN available.
-    shallow = hanging.FIN_TAB_REACH_MM + hanging.FIN_TAB_CLEARANCE_MM
+    # less than FIN_TAB_MIN_REACH + CLEARANCE + MARGIN available.
+    shallow = hanging.FIN_TAB_MIN_REACH_MM + hanging.FIN_TAB_CLEARANCE_MM
     plan = _plan(art, _extrude("fins"), tops={}, regions={}, model_top=shallow)
     assert plan.extra_parts == []
     assert plan.cuts == []
     assert [w["code"] for w in plan.warnings] == ["hang_skipped"]
+
+
+def test_fins_adapt_reach_to_thin_model():
+    art = _art(100, 100)
+    # Ceiling between adaptive floor and nominal reach.
+    ceiling = (
+        hanging.FIN_TAB_MIN_REACH_MM
+        + hanging.FIN_TAB_CLEARANCE_MM
+        + hanging.FIN_MARGIN_MM
+        + 0.5
+    )
+    plan = _plan(art, _extrude("fins"), tops={}, regions={}, model_top=ceiling)
+    assert len(plan.extra_parts) == 2
+    z1 = max(c.z1_mm for c in plan.cuts)
+    expected_reach = ceiling - hanging.FIN_MARGIN_MM - hanging.FIN_TAB_CLEARANCE_MM
+    assert z1 == pytest.approx(expected_reach + hanging.FIN_TAB_CLEARANCE_MM)
+    assert expected_reach < hanging.FIN_TAB_REACH_MM
+    assert any(w["code"] == "hang_depth_adapted" for w in plan.warnings)

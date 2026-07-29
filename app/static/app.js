@@ -688,23 +688,24 @@ function updateHangVisibility() {
   const mode = state.extrude.hang.mode;
   $("#fin-angle-field").hidden = mode !== "fins";
   const hint = $("#hang-depth-hint");
-  const minDepth = hangMinDepthMm(mode);
-  if (minDepth == null) {
+  const depths = hangDepthMm(mode);
+  if (depths == null) {
     hint.hidden = true;
     hint.textContent = "";
     return;
   }
   hint.hidden = false;
-  const forWhat = mode === "keyhole" ? " (sized for a #6 pan-head / small nail)" : "";
+  const forWhat = mode === "keyhole" ? " (#6 pan-head / small nail)" : "";
   hint.textContent =
-    `Needs ≥ ${minDepth.toFixed(1)} mm material depth at hang points ` +
-    `(plate + contiguous body above)${forWhat}.`;
+    `Needs ≥ ${depths.min.toFixed(1)} mm at hang points` +
+    ` (adapts up to ${depths.nominal.toFixed(1)} mm)` +
+    ` — plate + contiguous body above${forWhat}.`;
 }
 
-// Mirrors app.core.hanging.keyhole_min_depth_mm / fins_min_depth_mm.
-function hangMinDepthMm(mode) {
-  if (mode === "keyhole") return 3.7 + 1.0; // KEYHOLE_TOTAL + SAFETY
-  if (mode === "fins") return 3.5 + 0.2 + 1.0; // TAB_REACH + CLEARANCE + MARGIN
+// Mirrors app.core.hanging keyhole/fins min + nominal depth helpers.
+function hangDepthMm(mode) {
+  if (mode === "keyhole") return { min: 2.5 + 1.0, nominal: 3.7 + 1.0 };
+  if (mode === "fins") return { min: 2.0 + 0.2 + 1.0, nominal: 3.5 + 0.2 + 1.0 };
   return null;
 }
 
@@ -1134,7 +1135,11 @@ async function buildModel() {
 
 function renderWarnings(container, warnings) {
   container.innerHTML = "";
-  (warnings || []).forEach((w) => {
+  const list = (warnings || []).filter((w) => {
+    if (w.code === "ams_slots" && state.extrude.mode !== "ams") return false;
+    return true;
+  });
+  list.forEach((w) => {
     const el = document.createElement("div");
     el.className = "warning-banner";
     el.innerHTML = `<span>⚠</span>
