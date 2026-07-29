@@ -88,9 +88,25 @@ def test_single_box_with_plate_volume():
     )
     model = build_model(art, ex)
     _all_watertight(model)
-    # plate top snaps to 1.2; color top = 1.2 + 6.0 = 7.2. Body==color -> one solid.
+    # Heights are totals from the bed: the 1.2 plate is part of the 6.0, not
+    # added to it. Body==color -> one solid 6.0 tall.
     total_vol = sum(p.mesh.volume for p in model.parts)
-    assert total_vol == pytest.approx(600 * 7.2, rel=1e-3)
+    assert total_vol == pytest.approx(600 * 6.0, rel=1e-3)
+
+
+def test_plate_thicker_than_height_lifts_one_layer():
+    region = box(0, 0, 20, 30)
+    art = _art({R: _mp(region)})
+    ex = _extrude(
+        mode="swap", colors=[ColorSpec(hex=R, height_mm=0.8)], body=R,
+        plate=True, plate_th=1.2,
+    )
+    model = build_model(art, ex)
+    _all_watertight(model)
+    # 0.8 < plate top: lifted to 1.2 + one layer so the color still shows.
+    total_vol = sum(p.mesh.volume for p in model.parts)
+    assert total_vol == pytest.approx(600 * 1.4, rel=1e-3)
+    assert any(w["code"] == "height_below_plate" for w in model.warnings)
 
 
 # --------------------------------------------------------------------------

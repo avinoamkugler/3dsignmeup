@@ -595,6 +595,14 @@ input[type="range"] {
   border-top: 1px solid rgba(0, 0, 0, 0.35);
 }
 .fseg-flo { outline: 1px dashed rgba(255, 255, 255, 0.5); outline-offset: -2px; }
+/* Top of a color that shares its band's filament: no swap, but a real step. */
+.fmark {
+  position: absolute;
+  left: 0; right: 0;
+  height: 0;
+  border-top: 2px dashed rgba(18, 13, 11, 0.8);
+  pointer-events: auto;
+}
 .fbar-plate {
   position: absolute;
   left: 0; right: 0;
@@ -678,6 +686,43 @@ input[type="range"] {
   position: absolute; inset: 0;
   display: flex; align-items: center; justify-content: center; gap: 8px;
   color: var(--text-dim);
+}
+.viewer-btn {
+  position: absolute;
+  top: 10px; right: 10px;
+  z-index: 2;
+  width: 32px; height: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; line-height: 1;
+  color: var(--text);
+  background: rgba(18, 13, 11, 0.7);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.viewer-btn:hover { background: rgba(18, 13, 11, 0.9); border-color: var(--accent); }
+.viewer-hint {
+  position: absolute;
+  left: 10px; bottom: 10px;
+  z-index: 2;
+  font-size: 11px;
+  color: var(--text-faint);
+  background: rgba(18, 13, 11, 0.6);
+  padding: 3px 8px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+/* Fullscreen drops the 4:3 aspect box and fills the screen. Kept as two rules:
+   an unknown selector invalidates the whole rule it appears in. */
+.viewer:fullscreen {
+  aspect-ratio: auto;
+  width: 100vw; height: 100vh;
+  border: none; border-radius: 0;
+}
+.viewer:-webkit-full-screen {
+  aspect-ratio: auto;
+  width: 100vw; height: 100vh;
+  border: none; border-radius: 0;
 }
 .download-row { display: flex; flex-wrap: wrap; gap: 12px; }
 

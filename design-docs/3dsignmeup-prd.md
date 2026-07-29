@@ -98,9 +98,14 @@ beyond the working session. Simplicity beats robustness at scale.
   simplified, and extruded as polygons with holes — not per-pixel voxels.
   Adjacent color regions share boundary vertices exactly (traced from one label
   grid) so parts meet with no gaps or overlaps.
-- **FR-10 Per-color height.** Each palette color has an extrusion height in mm.
+- **FR-10 Per-color height.** Each palette color has an extrusion height in mm,
+  measured as TOTAL thickness from the bed — a backing plate is part of that
+  height, never an addition to it (otherwise a plate printed in the body color
+  silently doubles the body color's thickness). A height that would leave nothing
+  above the plate is lifted to one layer above it, with a warning.
   All heights snap to whole layers (`first_layer_height + n × layer_height`);
-  the UI shows requested vs. snapped values and layer counts.
+  the UI shows requested vs. snapped values, layer counts, and the relief left
+  above the plate.
 - **FR-11 Backing plate.** Default ON: a base slab in main body color under the
   full artwork outline, configurable thickness, keeping disconnected artwork
   (e.g., separate letters) as one printable object. "No plate" is the advanced

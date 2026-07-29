@@ -221,7 +221,7 @@
               </div>
 
               <div class="field span-all">
-                <label>Per-color heights</label>
+                <label>Per-color heights — total from the bed, plate included</label>
                 <div class="color-heights" id="color-heights"></div>
               </div>
 
@@ -303,6 +303,9 @@
             <div class="viewer-pane">
               <div class="viewer" id="viewer">
                 <div class="viewer-loading" id="viewer-loading"><span class="spin"></span> Loading 3D…</div>
+                <button class="viewer-btn" id="viewer-fullscreen" type="button"
+                        title="Fullscreen" aria-pressed="false" aria-label="Toggle fullscreen">⛶</button>
+                <div class="viewer-hint">drag orbit · wheel-press pan · scroll zoom</div>
               </div>
               <div class="download-row">
                 <a class="btn btn-primary" id="dl-3mf" download>⬇ sign.3mf</a>

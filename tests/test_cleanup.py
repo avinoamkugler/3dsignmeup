@@ -111,7 +111,7 @@ def test_enclosed_fill():
     assert not res.body_fill_mask[0, 0]
 
 
-def test_thin_feature_flags_one_px_line():
+def test_coreless_line_removed():
     h = w = 60
     labels = np.full((h, w), 1, np.int16)  # white bg
     labels[10:50, 30] = 0  # 1px-wide black line, length 40
@@ -119,8 +119,46 @@ def test_thin_feature_flags_one_px_line():
         labels, PAL2, mm_per_px=0.1, smoothness=0, min_feature_mm=0.5,
         clear_background=False, enclosed_background="plate",
     )
+    # 0.1mm wide is unprintable at min_feature_mm=0.5: the whole line goes.
+    assert not (res.labels == 0).any()
+
+
+def test_long_thin_sliver_removed_despite_area():
+    # 3px x 30px = 90px, well over the 25px^2 island threshold, but only 0.3mm
+    # wide — the edge-artifact shape that used to survive into the model as a
+    # full-height wall.
+    labels = np.full((40, 40), 1, np.int16)
+    labels[5:35, 20:23] = 0
+    res = run_cleanup(
+        labels, PAL2, mm_per_px=0.1, smoothness=0, min_feature_mm=0.5,
+        clear_background=False, enclosed_background="plate",
+    )
+    assert not (res.labels == 0).any()
+
+
+def test_bar_at_min_feature_width_survives():
+    labels = np.full((40, 40), 1, np.int16)
+    labels[5:35, 15:25] = 0  # 10px = 1.0mm wide
+    res = run_cleanup(
+        labels, PAL2, mm_per_px=0.1, smoothness=0, min_feature_mm=0.5,
+        clear_background=False, enclosed_background="plate",
+    )
+    assert (res.labels[20, 15:25] == 0).all()
+
+
+def test_thin_tail_on_chunky_shape_is_flagged_not_removed():
+    labels = np.full((60, 60), 1, np.int16)
+    labels[20:40, 10:30] = 0   # 2mm x 2mm core
+    labels[29, 30:50] = 0      # 1px tail hanging off it
+    res = run_cleanup(
+        labels, PAL2, mm_per_px=0.1, smoothness=0, min_feature_mm=0.5,
+        clear_background=False, enclosed_background="plate",
+    )
+    # The tail shares a component with printable material, so it stays...
+    assert res.labels[29, 45] == 0
+    # ...and the thin scan is what points it out.
     assert res.thin_mask is not None
-    assert res.thin_mask[30, 30]  # a line pixel is flagged
+    assert res.thin_mask[29, 45]
 
 
 def test_no_thin_mask_for_chunky_shape():

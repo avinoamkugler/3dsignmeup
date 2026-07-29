@@ -179,14 +179,39 @@ def test_snapped_heights_reported():
     assert sh["layers"] == 15
 
 
-def test_plate_snaps_total_once():
+def test_height_is_total_from_bed_with_plate():
     G = "#00ff00"
     colors = [ColorSpec(hex=G, height_mm=3.0)]
     plan = compute_plan(
         _extrude(colors=colors, body="#ff0000", plate=True, plate_th=1.2), colors
     )
-    # plate top snaps to 1.2 (6 layers); color top = snap(1.2+3.0)=4.2; rel=3.0.
+    # The plate is part of the height, not added to it: top stays 3.0 (15
+    # layers), leaving 1.8 of relief above the 1.2 plate.
     assert plan.snapped_heights[G]["snapped"] == pytest.approx(3.0)
+    assert plan.snapped_heights[G]["layers"] == 15
+    assert plan.bands[-1].z1_mm == pytest.approx(3.0)
+
+
+def test_height_under_plate_is_lifted_with_warning():
+    G = "#00ff00"
+    colors = [ColorSpec(hex=G, height_mm=1.0)]
+    plan = compute_plan(
+        _extrude(colors=colors, body="#ff0000", plate=True, plate_th=1.2), colors
+    )
+    assert plan.snapped_heights[G]["snapped"] == pytest.approx(1.4)
+    assert [w["code"] for w in plan.warnings].count("height_below_plate") == 1
+
+
+def test_body_colored_height_not_doubled_by_plate():
+    """A plate printed in the body color must not stack onto the body color's
+    own height — that made the body height read double and look inert."""
+    R = "#ff0000"
+    colors = [ColorSpec(hex=R, height_mm=4.0), ColorSpec(hex="#00ff00", height_mm=6.0)]
+    plan = compute_plan(
+        _extrude(colors=colors, body=R, plate=True, plate_th=2.0, lead=0.4), colors
+    )
+    assert plan.snapped_heights[R]["snapped"] == pytest.approx(4.0)
+    assert plan.snapped_heights["#00ff00"]["snapped"] == pytest.approx(6.0)
 
 
 # --------------------------------------------------------------------------

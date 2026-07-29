@@ -20,8 +20,9 @@ which the trimmed width defines.
 Fixed processing order (from the design doc):
 1. Smoothness: mode filtering on the label grid, kernel size scaled by
    smoothness x mm-scale (resolution independent); smoothness=0 is a no-op.
-2. Island removal: connected components with area < min_feature_mm^2 are
-   reassigned to their dominant surrounding label.
+2. Island removal: connected components with area < min_feature_mm^2, or that
+   are thinner than min_feature_mm everywhere, are reassigned to their dominant
+   surrounding label.
 3. Background clear (if clear_background): sample the four corner labels;
    flood-fill every same-label region 4-connected to any corner -> TRANSPARENT.
    Originally-transparent pixels also count as corner-reachable background.
@@ -44,6 +45,12 @@ Implementation choices documented inline:
   sub-threshold component to the label of its nearest surviving pixel
   (Euclidean distance-transform fill). This is a vectorized equivalent of
   "dominant surrounding label" for tiny regions. Iterated up to 3 passes.
+- Sub-threshold means small OR coreless: area alone misses long slivers (a 3px
+  wide, 90px tall edge artifact has plenty of area but cannot print). A
+  component is coreless when it holds no pixel that survives eroding its color
+  by min_feature_mm/2, i.e. the min-feature disk fits nowhere inside it. Only
+  fully coreless components go; a fat shape with a thin tail keeps both, since
+  the tail is still attached to printable material.
 """
 from __future__ import annotations
 
@@ -88,22 +95,52 @@ def _smooth(labels: Labels, radius: int) -> Labels:
     return best_label
 
 
-def _remove_islands(labels: Labels, min_area_px: float) -> Labels:
+def _core_mask(labels: Labels, radius: int) -> np.ndarray:
+    """Pixels where a disk of ``radius`` fits inside their own color.
+
+    Eroded per label value with the image border treated as outside, so a
+    sliver hugging the edge has no core either.
+    """
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+    )
+    core = np.zeros(labels.shape, dtype=bool)
+    for v in np.unique(labels):
+        m = (labels == v).astype(np.uint8)
+        eroded = cv2.erode(
+            m, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0
+        )
+        core |= eroded > 0
+    return core
+
+
+def _remove_islands(
+    labels: Labels, min_area_px: float, core_radius_px: int = 0
+) -> Labels:
     """Reassign sub-threshold homogeneous components to their nearest
-    surviving pixel's label. Iterates until stable or 3 passes."""
-    if min_area_px <= 1:
+    surviving pixel's label. Iterates until stable or 3 passes.
+
+    Sub-threshold = area below ``min_area_px`` or (when ``core_radius_px`` >= 1)
+    holding no core pixel at that radius, which catches slivers too thin to
+    print however long they are.
+    """
+    if min_area_px <= 1 and core_radius_px < 1:
         return labels
     out = labels.copy()
     bg = int(out.min()) - 1  # a value not present, so every pixel is labeled
     for _ in range(_MAX_ISLAND_PASSES):
         cc = cc_label(out, background=bg, connectivity=1)
         areas = np.bincount(cc.ravel())
-        small_ids = np.nonzero(areas < min_area_px)[0]
+        drop_ids = set(np.nonzero(areas < min_area_px)[0].tolist())
+        if core_radius_px >= 1:
+            core = _core_mask(out, core_radius_px)
+            cored = set(np.unique(cc[core]).tolist())
+            drop_ids |= set(range(1, len(areas))) - cored
         # id 0 only appears for pixels == bg (none here); guard anyway
-        small_ids = small_ids[small_ids != 0]
-        if small_ids.size == 0:
+        drop_ids.discard(0)
+        if not drop_ids:
             break
-        small_mask = np.isin(cc, small_ids)
+        small_mask = np.isin(cc, list(drop_ids))
         if small_mask.all():
             break
         # nearest surviving pixel for every small pixel
@@ -246,9 +283,12 @@ def run_cleanup(
     radius = int(round(smoothness * 0.05 / mm_per_px)) if smoothness > 0 else 0
     labels = _smooth(labels, radius)
 
-    # 2. Island removal (area threshold in px^2).
-    min_area_px = (min_feature_mm / mm_per_px) ** 2
-    labels = _remove_islands(labels, min_area_px)
+    # 2. Island removal (area threshold in px^2) + coreless-sliver removal.
+    #    The core radius floors to whole px so only features clearly under
+    #    min_feature_mm are dropped.
+    min_feature_px = min_feature_mm / mm_per_px
+    min_area_px = min_feature_px**2
+    labels = _remove_islands(labels, min_area_px, int(min_feature_px / 2))
 
     body_fill_mask = np.zeros(labels.shape, dtype=bool)
 

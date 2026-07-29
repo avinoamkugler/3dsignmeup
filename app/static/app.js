@@ -539,11 +539,16 @@ function buildScreen3() {
   const palette = state.approvedProcess.palette;
   // (Re)build per-color list, keeping prior values by hex where possible.
   const prior = new Map(state.extrude.colors.map((c) => [c.hex, c]));
+  // Heights are totals from the bed, so the default has to clear the plate to
+  // give the same 3 mm of relief a plate-less sign gets.
+  const defaultHeight = snapToLayerMultiple(
+    plateTopMm() + 3.0, state.extrude.layer_height_mm,
+  );
   state.extrude.colors = palette.map((hex) => {
     const p = prior.get(hex);
     return {
       hex,
-      height_mm: p ? p.height_mm : 3.0,
+      height_mm: p ? p.height_mm : defaultHeight,
       first_layer_only: p ? p.first_layer_only : false,
     };
   });
@@ -589,23 +594,35 @@ function syncHeightInputSteps() {
   lead.step = lh;
 }
 
-function layerInfo(height) {
+function plateTopMm() {
+  if (!state.extrude.plate.enabled) return 0;
+  return snapZ(state.extrude.plate.thickness_mm, state.extrude.layer_height_mm).snapped;
+}
+
+// A height is the color's TOTAL thickness from the bed. With a plate the second
+// number people actually need is the relief left above it.
+function heightInfo(height) {
   const lh = state.extrude.layer_height_mm;
-  return snapZ(height, lh);
+  const enabled = state.extrude.plate.enabled;
+  const { top, layers, relief } = colorTop(height, plateTopMm(), enabled, lh);
+  const text =
+    `→ ${layers} layer${layers === 1 ? "" : "s"} (${top.toFixed(1)} mm` +
+    (enabled ? ` · ${relief.toFixed(1)} mm above plate)` : ")");
+  return { top, layers, relief, text };
 }
 
 function renderColorHeights() {
   const wrap = $("#color-heights");
   wrap.innerHTML = "";
   const lh = state.extrude.layer_height_mm;
+  const min = round9(plateTopMm() + lh);
   state.extrude.colors.forEach((c) => {
-    const { layers, snapped } = layerInfo(c.height_mm);
     const row = document.createElement("div");
     row.className = "ch-row";
     row.innerHTML = `
       <span class="ch-swatch" style="background:${c.hex}"></span>
-      <input type="number" min="${lh}" step="${lh}" value="${c.height_mm}" />
-      <span class="ch-layers">→ ${layers} layer${layers === 1 ? "" : "s"} (${snapped.toFixed(1)} mm)</span>
+      <input type="number" min="${min}" step="${lh}" value="${c.height_mm}" />
+      <span class="ch-layers">${heightInfo(c.height_mm).text}</span>
       <label class="ch-flo checkbox"><input type="checkbox" ${c.first_layer_only ? "checked" : ""} /> 1st layer only</label>`;
     const numInput = row.querySelector('input[type="number"]');
     const chk = row.querySelector('input[type="checkbox"]');
@@ -613,9 +630,7 @@ function renderColorHeights() {
       const v = parseFloat(numInput.value);
       if (!Number.isNaN(v) && v > 0) {
         c.height_mm = v;
-        const info = layerInfo(v);
-        row.querySelector(".ch-layers").textContent =
-          `→ ${info.layers} layer${info.layers === 1 ? "" : "s"} (${info.snapped.toFixed(1)} mm)`;
+        row.querySelector(".ch-layers").textContent = heightInfo(v).text;
         renderFilamentPanel();
       }
     });
@@ -743,13 +758,20 @@ $("#layer-height").addEventListener("input", () => {
   renderColorHeights();
   renderFilamentPanel();
 });
+// The plate is part of every height, so its controls also change what each
+// per-color row reports.
 $("#plate-enabled").addEventListener("change", () => {
   state.extrude.plate.enabled = $("#plate-enabled").checked;
+  renderColorHeights();
   renderFilamentPanel();
 });
 $("#plate-thickness").addEventListener("input", () => {
   const v = parseFloat($("#plate-thickness").value);
-  if (!Number.isNaN(v) && v > 0) { state.extrude.plate.thickness_mm = v; renderFilamentPanel(); }
+  if (!Number.isNaN(v) && v > 0) {
+    state.extrude.plate.thickness_mm = v;
+    renderColorHeights();
+    renderFilamentPanel();
+  }
 });
 $("#chamfer-enabled").addEventListener("change", () => {
   state.extrude.chamfer.enabled = $("#chamfer-enabled").checked;
@@ -780,17 +802,19 @@ function snapZ(z, lh) {
   return { snapped: round9(n * lh), layers: n };
 }
 
+// Heights are TOTAL thickness from the bed: the plate is part of a color's
+// height, not an addition to it. Mirrors app/core/swapplan.py color_top().
 function colorTop(height, plateTop, plateEnabled, lh) {
-  if (plateEnabled) {
-    let { snapped: total, layers } = snapZ(plateTop + height, lh);
-    if (total <= plateTop + PLAN_EPS) {
-      total = round9(plateTop + lh);
-      layers = snapZ(total, lh).layers;
-    }
-    return { top: total, layers, snappedRel: round9(total - plateTop) };
+  let { snapped: total, layers } = snapZ(height, lh);
+  if (plateEnabled && total <= plateTop + PLAN_EPS) {
+    total = round9(plateTop + lh);
+    layers = snapZ(total, lh).layers;
   }
-  const { snapped: total, layers } = snapZ(height, lh);
-  return { top: total, layers, snappedRel: total };
+  return {
+    top: total,
+    layers,
+    relief: plateEnabled ? round9(total - plateTop) : total,
+  };
 }
 
 // Colors present in the art (coverage > 0), ordered so that within a
@@ -822,8 +846,8 @@ function computePlan(extrude, visibleColors) {
 
   const tops = {};
   for (const c of visibleColors) {
-    const { top, layers, snappedRel } = colorTop(c.height_mm, plateTop, plateEnabled, lh);
-    plan.snappedHeights[c.hex] = { requested: c.height_mm, snapped: snappedRel, layers };
+    const { top, layers, relief } = colorTop(c.height_mm, plateTop, plateEnabled, lh);
+    plan.snappedHeights[c.hex] = { requested: c.height_mm, snapped: top, layers, relief };
     if (!c.first_layer_only) tops[c.hex] = top;
   }
   plan.tops = tops;
@@ -1007,8 +1031,25 @@ function renderFilamentPanel() {
     bar.appendChild(flo);
   }
 
+  // A color whose top is not a band edge (the body color's own top, or any
+  // color sharing the band's filament) changes no filament, so it would leave
+  // no trace on the bar at all. Mark those tops: without them, editing the body
+  // color's height looks like it does nothing.
+  const marks = [];
+  for (const [hex, t] of Object.entries(plan.tops)) {
+    if ([...boundaries].some((b) => Math.abs(b - t) < 1e-6)) continue;
+    marks.push(hex);
+    boundaries.add(round9(t));
+    const mark = document.createElement("div");
+    mark.className = "fmark";
+    mark.style.bottom = `${(t / total) * 100}%`;
+    mark.title = `${hex} top  ·  ${t.toFixed(2)} mm  (no filament change here)`;
+    bar.appendChild(mark);
+  }
+
   // Plate zone marker.
   if (plan.plateTop > 0) {
+    boundaries.add(round9(plan.plateTop));
     const pz = document.createElement("div");
     pz.className = "fbar-plate";
     pz.style.bottom = "0%";
@@ -1016,6 +1057,13 @@ function renderFilamentPanel() {
     pz.title = `backing plate  ·  0–${plan.plateTop.toFixed(2)} mm`;
     pz.innerHTML = `<span>plate</span>`;
     bar.appendChild(pz);
+  }
+
+  if (marks.length) {
+    const extra =
+      `Dashed: top of ${marks.join(", ")} — same filament as the band, so no swap.`;
+    note.textContent = note.hidden ? extra : `${note.textContent} ${extra}`;
+    note.hidden = false;
   }
 
   renderScaleLabels(scale, [...boundaries].sort((a, b) => a - b), total);
@@ -1064,6 +1112,7 @@ function renderAmsBar(plan, bar, scale, headline, note) {
   }
 
   if (plan.plateTop > 0) {
+    boundaries.add(round9(plan.plateTop));
     const pz = document.createElement("div");
     pz.className = "fbar-plate";
     pz.style.bottom = "0%";
@@ -1205,17 +1254,22 @@ function renderScreen4() {
   if (!entries.length) {
     snapWrap.innerHTML = `<p class="empty-note">No height data.</p>`;
   } else {
+    // Heights are totals from the bed; with a plate, show what is left above it.
+    const plateTop = plateTopMm();
     let rows = "";
     for (const [hex, h] of entries) {
       rows += `<tr>
         <td>${colorChip(hex)}</td>
         <td>${h.requested.toFixed(2)}</td>
         <td>${h.snapped.toFixed(2)}</td>
+        ${plateTop > 0 ? `<td>${(h.snapped - plateTop).toFixed(2)}</td>` : ""}
         <td>${h.layers}</td>
       </tr>`;
     }
     snapWrap.innerHTML = `<div class="table-scroll"><table class="data-table">
-      <thead><tr><th>Color</th><th>Requested</th><th>Snapped</th><th>Layers</th></tr></thead>
+      <thead><tr><th>Color</th><th>Requested</th><th>Snapped total</th>${
+        plateTop > 0 ? "<th>Above plate</th>" : ""
+      }<th>Layers</th></tr></thead>
       <tbody>${rows}</tbody></table></div>`;
   }
 
@@ -1244,13 +1298,53 @@ function disposeViewer() {
   if (!viewer) return;
   cancelAnimationFrame(viewer.raf);
   viewer.controls.dispose();
+  if (viewer.onMiddleDown) {
+    viewer.renderer.domElement.removeEventListener("mousedown", viewer.onMiddleDown);
+  }
   viewer.renderer.dispose();
   if (viewer.renderer.domElement && viewer.renderer.domElement.parentNode) {
     viewer.renderer.domElement.parentNode.removeChild(viewer.renderer.domElement);
   }
   if (viewer.onResize) window.removeEventListener("resize", viewer.onResize);
+  exitViewerFullscreen();
   viewer = null;
 }
+
+// ---------- fullscreen ----------
+function fullscreenEl() {
+  return document.fullscreenElement || document.webkitFullscreenElement || null;
+}
+
+function toggleViewerFullscreen() {
+  const el = $("#viewer");
+  if (fullscreenEl()) {
+    exitViewerFullscreen();
+    return;
+  }
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (!req) { toast("This browser has no fullscreen API.", "Fullscreen unavailable"); return; }
+  Promise.resolve(req.call(el)).catch((err) => toast(err.message, "Fullscreen failed"));
+}
+
+function exitViewerFullscreen() {
+  if (!fullscreenEl()) return;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  if (exit) Promise.resolve(exit.call(document)).catch(() => {});
+}
+
+function onFullscreenChange() {
+  const on = fullscreenEl() === $("#viewer");
+  const btn = $("#viewer-fullscreen");
+  btn.textContent = on ? "⤡" : "⛶";
+  btn.title = on ? "Exit fullscreen (Esc)" : "Fullscreen";
+  btn.setAttribute("aria-pressed", on ? "true" : "false");
+  // The element's box updates after the event fires, so resize on the next frame.
+  if (viewer && viewer.onResize) requestAnimationFrame(viewer.onResize);
+}
+
+$("#viewer-fullscreen").addEventListener("click", toggleViewerFullscreen);
+document.addEventListener("fullscreenchange", onFullscreenChange);
+document.addEventListener("webkitfullscreenchange", onFullscreenChange);
 
 function loadViewer(glbUrl) {
   disposeViewer();
@@ -1285,11 +1379,21 @@ function loadViewer(glbUrl) {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
+  // Slicer/CAD convention (Bambu Studio, Fusion): left orbits, the scroll
+  // wheel *pressed* pans, the wheel itself zooms.
+  controls.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.PAN,
+    RIGHT: THREE.MOUSE.PAN,
+  };
+  // Chrome/Firefox start autoscroll on a middle press unless it is consumed.
+  const onMiddleDown = (e) => { if (e.button === 1) e.preventDefault(); };
+  renderer.domElement.addEventListener("mousedown", onMiddleDown);
 
   const grid = new THREE.GridHelper(400, 40, 0x3e2f28, 0x251c18);
   scene.add(grid);
 
-  viewer = { renderer, scene, camera, controls, raf: 0 };
+  viewer = { renderer, scene, camera, controls, raf: 0, onMiddleDown };
 
   const loader = new GLTFLoader();
   loader.load(

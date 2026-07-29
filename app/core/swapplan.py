@@ -4,7 +4,7 @@ See module docstring history in the design docs. Public API:
 
 snap_z(z_mm, *, layer_height_mm) -> (snapped_z, layers)
 color_top(height_mm, *, plate_top, plate_enabled, layer_height_mm)
-  -> (top_z, layers, snapped_rel)
+  -> (top_z, layers, relief_above_plate)   # height_mm is total, from the bed
 compute_plan(extrude, visible_colors) -> Plan
   Plan.bands / .events / .sibling_spans / .n_swaps / .snapped_heights / .warnings
 """
@@ -70,32 +70,21 @@ def color_top(
     plate_enabled: bool,
     layer_height_mm: float,
 ) -> tuple[float, int, float]:
-    """Absolute snapped top Z of a color, its layer count, and its snapped
-    height relative to the plate top.
+    """Absolute snapped top Z of a color, its layer count, and its relief
+    above the plate top.
 
-    With a plate the total ``plate_thickness + height`` is snapped once (avoids
-    double rounding); the reported relative height is ``top - plate_top`` and is
-    clamped to at least one layer above the plate.
+    Heights are TOTAL thickness measured from the bed, so a backing plate is
+    part of a color's height rather than an invisible addition to it (a plate
+    printed in the body color would otherwise silently double the body color's
+    thickness). A height that would leave no material above the plate is lifted
+    to one layer above it; the caller reports that as a warning.
     """
-    if plate_enabled:
-        total, layers = snap_z(
-            plate_top + height_mm,
-            layer_height_mm=layer_height_mm,
-        )
-        if total <= plate_top + _EPS:
-            total = round(plate_top + layer_height_mm, 9)
-            _, layers = snap_z(
-                total,
-                layer_height_mm=layer_height_mm,
-            )
-        snapped_rel = round(total - plate_top, 9)
-    else:
-        total, layers = snap_z(
-            height_mm,
-            layer_height_mm=layer_height_mm,
-        )
-        snapped_rel = total
-    return total, layers, snapped_rel
+    total, layers = snap_z(height_mm, layer_height_mm=layer_height_mm)
+    if plate_enabled and total <= plate_top + _EPS:
+        total = round(plate_top + layer_height_mm, 9)
+        _, layers = snap_z(total, layer_height_mm=layer_height_mm)
+    relief = round(total - plate_top, 9) if plate_enabled else total
+    return total, layers, relief
 
 
 def compute_plan(extrude: ExtrudeParams, visible_colors: list[ColorSpec]) -> Plan:
@@ -119,8 +108,9 @@ def compute_plan(extrude: ExtrudeParams, visible_colors: list[ColorSpec]) -> Pla
 
     # --- snapped heights + absolute tops for every visible color -----------
     tops: dict[str, float] = {}
+    lifted: list[str] = []
     for c in visible_colors:
-        top, layers, snapped_rel = color_top(
+        top, layers, relief = color_top(
             c.height_mm,
             plate_top=plate_top,
             plate_enabled=plate_enabled,
@@ -128,11 +118,23 @@ def compute_plan(extrude: ExtrudeParams, visible_colors: list[ColorSpec]) -> Pla
         )
         plan.snapped_heights[c.hex] = {
             "requested": c.height_mm,
-            "snapped": snapped_rel,
+            "snapped": top,
             "layers": layers,
         }
         if not c.first_layer_only:
             tops[c.hex] = top
+            if plate_enabled and c.height_mm < plate_top + lh - _EPS:
+                lifted.append(c.hex)
+    if lifted:
+        plan.warnings.append(
+            {
+                "code": "height_below_plate",
+                "msg": (
+                    f"{', '.join(lifted)} asked for less than the plate's "
+                    f"{plate_top:g} mm; lifted to one layer above it"
+                ),
+            }
+        )
 
     if extrude.mode == "ams":
         filaments = {c.hex for c in visible_colors} | {body}
