@@ -58,6 +58,30 @@ def rgb_to_hex(rgb: tuple[int, int, int] | np.ndarray) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+@dataclass(frozen=True)
+class TrimBox:
+    """Half-open image-space crop rectangle: rows [top, bottom), cols
+    [left, right)."""
+
+    top: int
+    left: int
+    bottom: int
+    right: int
+
+    @property
+    def width(self) -> int:
+        return self.right - self.left
+
+    @property
+    def height(self) -> int:
+        return self.bottom - self.top
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        """(H, W) of the cropped grid, comparable to ``labels.shape``."""
+        return (self.height, self.width)
+
+
 @dataclass
 class CleanupResult:
     """Output of the quantize+cleanup stage (one preview round-trip)."""
@@ -79,6 +103,23 @@ class CleanupResult:
 
     coverage: dict[str, float]
     """hex -> fraction of non-transparent pixels holding that palette color."""
+
+
+@dataclass
+class PreparedArt:
+    """Output of cleanup.prepare: a cleaned grid plus the scale it was cleaned
+    at. Downstream stages must use this ``mm_per_px``, not one derived from the
+    source image width, because trimming changes it."""
+
+    result: CleanupResult
+
+    mm_per_px: float
+    """Scale of ``result.labels`` — target_width_mm divided by the *trimmed*
+    width when a trim happened, else by the source width."""
+
+    trim: TrimBox | None
+    """The crop applied to the quantized grid, or None when nothing was
+    trimmed. Image-space coords in the source image."""
 
 
 @dataclass

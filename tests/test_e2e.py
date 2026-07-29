@@ -91,8 +91,20 @@ def test_preview(client, session):
     opaque = img[img[..., 3] > 0]
     shown = {f"#{r_:02x}{g:02x}{b:02x}" for r_, g, b in map(tuple, opaque[:, :3])}
     assert shown <= set(PROCESS["palette"])
-    assert img[0, 0, 3] == 0  # corner background cleared
-    assert img[130, 130, 3] == 0  # enclosed counter -> hole (plate mode renders transparent)
+
+    # Margins are trimmed to the artwork bbox: rows 60..219 (white ring top to
+    # blue square bottom), cols 60..359. So the preview is 300x160 and artwork
+    # touches every border.
+    assert img.shape[:2] == (160, 300)
+    alpha = img[..., 3] > 0
+    assert alpha[0].any() and alpha[-1].any()
+    assert alpha[:, 0].any() and alpha[:, -1].any()
+
+    # Background surviving inside the bbox is still cleared: original (210, 220)
+    # sits between the ring and the blue square.
+    assert img[150, 160, 3] == 0
+    # enclosed counter -> hole (plate mode renders transparent); original (130, 130)
+    assert img[70, 70, 3] == 0
 
     # coverage sums to ~1 over remaining art
     assert abs(sum(prev["color_coverage"].values()) - 1.0) < 0.05

@@ -23,12 +23,18 @@ from app.api.schemas import (
 )
 from app.core import cleanup, export, geometry, palette, session, vectorize
 from app.core.session import Session, SessionStore
+from app.core.types import Labels, PreparedArt
 
 router = APIRouter()
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Palette size suggested on upload. The client's "Number of colors" stepper
+# starts here; 5 keeps gradients and drop shadows from collapsing into one flat
+# region on typical logo art.
+_DEFAULT_N_COLORS = 5
 
 _MEDIA_TYPES = {
     ".png": "image/png",
@@ -40,6 +46,21 @@ _MEDIA_TYPES = {
 
 def _store(request: Request) -> SessionStore:
     return request.app.state.store
+
+
+def _prepare(labels: Labels, params: ProcessParams) -> PreparedArt:
+    """Trim + clean a quantized grid. Shared by preview and model so both see
+    the same crop and the same mm scale."""
+    return cleanup.prepare(
+        labels,
+        params.palette,
+        target_width_mm=params.target_width_mm,
+        smoothness=params.smoothness,
+        min_feature_mm=params.min_feature_mm,
+        clear_background=params.clear_background,
+        enclosed_background=params.enclosed_background,
+        paint_fills=[(f.x, f.y, f.to_hex) for f in params.paint_fills],
+    )
 
 
 def _get_session(request: Request, session_id: str) -> Session:
@@ -76,7 +97,7 @@ async def create_session(request: Request, image: UploadFile = File(...)) -> Ses
         raise HTTPException(status_code=400, detail="not a decodable image")
     rgba = sess.rgba()
     height_px, width_px = int(rgba.shape[0]), int(rgba.shape[1])
-    suggested = palette.detect_palette(rgba, 3)
+    suggested = palette.detect_palette(rgba, _DEFAULT_N_COLORS)
     return SessionCreated(
         session_id=sess.id,
         width_px=width_px,
@@ -102,8 +123,6 @@ def detect_palette(request: Request, session_id: str, body: PaletteRequest) -> P
 def preview(request: Request, session_id: str, params: ProcessParams) -> PreviewResponse:
     sess = _get_session(request, session_id)
     rgba = sess.rgba()
-    width_px = int(rgba.shape[1])
-    mm_per_px = params.target_width_mm / width_px
 
     h = session.params_hash(params.model_dump())
     meta_path = sess.artifact_path(f"meta_{h}.json")
@@ -111,16 +130,7 @@ def preview(request: Request, session_id: str, params: ProcessParams) -> Preview
         return PreviewResponse.model_validate_json(meta_path.read_text())
 
     labels = palette.quantize(rgba, params.quantize_palette or params.palette)
-    result = cleanup.run_cleanup(
-        labels,
-        params.palette,
-        mm_per_px=mm_per_px,
-        smoothness=params.smoothness,
-        min_feature_mm=params.min_feature_mm,
-        clear_background=params.clear_background,
-        enclosed_background=params.enclosed_background,
-        paint_fills=[(f.x, f.y, f.to_hex) for f in params.paint_fills],
-    )
+    result = _prepare(labels, params).result
 
     png = export.render_clean_png(result.labels, params.palette)
     sess.artifact_path(f"prev_{h}.png").write_bytes(png)
@@ -175,22 +185,15 @@ def build_model(request: Request, session_id: str, body: ModelRequest) -> ModelR
         return ModelResponse.model_validate_json(meta_path.read_text())
 
     rgba = sess.rgba()
-    width_px = int(rgba.shape[1])
-    mm_per_px = process.target_width_mm / width_px
 
     labels = palette.quantize(rgba, process.quantize_palette or process.palette)
-    result = cleanup.run_cleanup(
-        labels,
-        process.palette,
-        mm_per_px=mm_per_px,
-        smoothness=process.smoothness,
-        min_feature_mm=process.min_feature_mm,
-        clear_background=process.clear_background,
-        enclosed_background=process.enclosed_background,
-        paint_fills=[(f.x, f.y, f.to_hex) for f in process.paint_fills],
-    )
+    prepared = _prepare(labels, process)
+    result = prepared.result
     art = vectorize.vectorize(
-        result, process.palette, mm_per_px=mm_per_px, smoothness=process.smoothness
+        result,
+        process.palette,
+        mm_per_px=prepared.mm_per_px,
+        smoothness=process.smoothness,
     )
     built = geometry.build_model(art, extrude)
 
@@ -267,9 +270,29 @@ def get_model_file(
 # --------------------------------------------------------------------------
 # 6. Root
 # --------------------------------------------------------------------------
+_VERSIONED_ASSETS = ("styles.css", "app.js")
+
+
+def _asset_version() -> str:
+    """Cache key for the assets index.html links, from their mtimes.
+
+    The header alone cannot rescue a copy a browser already cached under
+    heuristic freshness — it will keep serving it until that lapses. Changing
+    the URL does, so an edit is visible without a manual hard reload.
+    """
+    stamp = 0.0
+    for name in _VERSIONED_ASSETS:
+        path = STATIC_DIR / name
+        if path.is_file():
+            stamp = max(stamp, path.stat().st_mtime)
+    return str(int(stamp))
+
+
 @router.get("/", response_class=HTMLResponse)
 def index() -> HTMLResponse:
     index_file = STATIC_DIR / "index.html"
     if not index_file.is_file():
         return PlainTextResponse("frontend not built", status_code=503)
-    return HTMLResponse(index_file.read_text())
+    html = index_file.read_text().replace("__ASSET_V__", _asset_version())
+    # Never cache the document itself; it carries the asset version.
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})

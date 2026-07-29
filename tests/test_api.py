@@ -16,6 +16,7 @@ import trimesh
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.api.routes import _DEFAULT_N_COLORS
 from app.core import cleanup, export, geometry, palette, vectorize
 from app.core.types import BuiltModel, CleanupResult, Part, SwapEvent
 
@@ -131,7 +132,9 @@ def test_upload_happy(client):
     body = resp.json()
     assert body["width_px"] == 8
     assert body["height_px"] == 6
-    assert body["suggested_palette"] == ["#010101", "#020202", "#030303"]
+    # fake_detect echoes n_colors, so this pins the suggested palette size.
+    assert len(body["suggested_palette"]) == _DEFAULT_N_COLORS
+    assert body["suggested_palette"][:3] == ["#010101", "#020202", "#030303"]
     assert len(body["session_id"]) == 6  # secrets.token_hex(3)
 
 

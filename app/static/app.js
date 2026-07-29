@@ -15,7 +15,7 @@ const state = {
   colorLock: true,      // "Keep original color mapping" toggle (default ON)
   quantizePalette: null,// frozen hex list for pixel->label assignment; snapshot of palette
   process: {            // ProcessParams (screen 2)
-    target_width_mm: 120,
+    target_width_mm: 160,   // width of the trimmed artwork, not of the upload
     palette: [],
     smoothness: 1,
     min_feature_mm: 0.5,
@@ -187,6 +187,22 @@ async function handleFile(file) {
 
 $("#upload-next").addEventListener("click", () => {
   if (state.session) goToStep(2);
+});
+
+// Full-resolution copy, not the 500px display logo: this feeds the real
+// pipeline, and vectorized curves get visibly faceted at low mm-per-px.
+const DEMO_URL = "/static/logo-full.png";
+const demoBtn = $("#demo-load");
+demoBtn.addEventListener("click", async () => {
+  demoBtn.disabled = true;
+  try {
+    const blob = await (await apiFetch(DEMO_URL)).blob();
+    await handleFile(new File([blob], "3dsignmeup-logo.png", { type: "image/png" }));
+  } catch (err) {
+    toast(err.message, "Could not load the demo image");
+  } finally {
+    demoBtn.disabled = false;
+  }
 });
 
 // ============================================================
@@ -1246,7 +1262,7 @@ function loadViewer(glbUrl) {
   const height = container.clientHeight || 480;
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x0b0e14);
+  scene.background = new THREE.Color(0x120d0b);
 
   const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 5000);
   camera.position.set(0, 0, 200);
@@ -1257,7 +1273,7 @@ function loadViewer(glbUrl) {
   container.appendChild(renderer.domElement);
 
   // Neutral studio lighting
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x444455, 1.0);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x554438, 1.0);
   scene.add(hemi);
   const dir = new THREE.DirectionalLight(0xffffff, 1.6);
   dir.position.set(60, 120, 100);
@@ -1270,7 +1286,7 @@ function loadViewer(glbUrl) {
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
 
-  const grid = new THREE.GridHelper(400, 40, 0x2a323d, 0x1b222c);
+  const grid = new THREE.GridHelper(400, 40, 0x3e2f28, 0x251c18);
   scene.add(grid);
 
   viewer = { renderer, scene, camera, controls, raf: 0 };

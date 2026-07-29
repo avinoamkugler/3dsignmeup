@@ -1,10 +1,11 @@
 """Tests for the deterministic cleanup pipeline (FR-3..FR-7)."""
 import cv2
 import numpy as np
+import pytest
 from skimage.measure import label as cc_label
 
-from app.core.cleanup import run_cleanup
-from app.core.types import HOLE_PLATE, TRANSPARENT
+from app.core.cleanup import prepare, run_cleanup
+from app.core.types import HOLE_PLATE, TRANSPARENT, TrimBox
 
 PAL3 = ["#1a1a1a", "#e63946", "#f1faee"]
 PAL2 = ["#000000", "#ffffff"]
@@ -254,3 +255,90 @@ def test_paint_same_color_promotes_body_fill_to_real_color():
     assert res.labels[60, 60] == 1
     assert not res.body_fill_mask[60, 60]
 
+
+
+# --------------------------------------------------------------------------
+# Margin trimming (prepare)
+# --------------------------------------------------------------------------
+def _offset_disk(h=120, w=200):
+    """A black disk on a white background, deliberately off-centre so the
+    trim box is asymmetric in both axes."""
+    img = np.full((h, w), 1, np.int16)
+    cv2.circle(img, (70, 40), 25, 0, -1)
+    return img
+
+
+def test_prepare_trims_margins_and_scales_target_width_to_the_art():
+    labels = _offset_disk()
+    prep = prepare(
+        labels, PAL2, target_width_mm=100.0, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="plate",
+    )
+    # Disk spans cols 45..95 and rows 15..65 -> a 51x51 box.
+    assert prep.trim == TrimBox(top=15, left=45, bottom=66, right=96)
+    assert prep.result.labels.shape == (51, 51)
+    # target_width_mm now sizes the artwork, not the 200px-wide source image.
+    assert prep.mm_per_px == pytest.approx(100.0 / 51)
+
+
+def test_prepare_keeps_clearing_background_inside_the_trimmed_box():
+    """The regression risk of trimming: art touches the trimmed corners, so
+    corner sampling would mistake the art itself for background."""
+    labels = _offset_disk()
+    prep = prepare(
+        labels, PAL2, target_width_mm=100.0, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="plate",
+    )
+    out = prep.result.labels
+    # The disk survives...
+    assert (out == 0).any()
+    assert out[25, 25] == 0  # centre of the trimmed box
+    # ...and the white corners of the box are still cleared.
+    assert out[0, 0] == TRANSPARENT
+
+
+def test_prepare_does_not_trim_when_clear_background_is_off():
+    labels = _offset_disk()
+    prep = prepare(
+        labels, PAL2, target_width_mm=100.0, smoothness=0, min_feature_mm=0.5,
+        clear_background=False, enclosed_background="plate",
+    )
+    assert prep.trim is None
+    assert prep.result.labels.shape == labels.shape
+    assert prep.mm_per_px == pytest.approx(100.0 / 200)
+
+
+def test_prepare_ignores_sub_min_feature_specks_when_trimming():
+    """A speck in the margin must not inflate the box. min_feature_mm=1.5 at
+    0.5mm/px puts the threshold at 9px, so the stray pixel is sub-threshold —
+    at 0.5mm/px a single pixel is exactly 0.5mm and a legitimate feature."""
+    labels = _offset_disk()
+    labels[110, 190] = 0  # a single stray pixel far from the disk
+    prep = prepare(
+        labels, PAL2, target_width_mm=100.0, smoothness=0, min_feature_mm=1.5,
+        clear_background=True, enclosed_background="plate",
+    )
+    assert prep.trim == TrimBox(top=15, left=45, bottom=66, right=96)
+
+
+def test_prepare_leaves_full_bleed_art_untrimmed():
+    """No background to clear -> nothing to trim, and the old scale stands."""
+    labels = np.zeros((60, 80), np.int16)
+    prep = prepare(
+        labels, PAL2, target_width_mm=100.0, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="plate",
+    )
+    assert prep.trim is None
+    assert prep.mm_per_px == pytest.approx(100.0 / 80)
+
+
+def test_prepare_preserves_enclosed_background_through_the_trim():
+    labels = _o_shape()
+    prep = prepare(
+        labels, PAL2, target_width_mm=100.0, smoothness=0, min_feature_mm=0.5,
+        clear_background=True, enclosed_background="plate",
+    )
+    out = prep.result.labels
+    assert prep.trim == TrimBox(top=15, left=15, bottom=106, right=106)
+    assert (out == HOLE_PLATE).any()  # the counter is still a plate-backed hole
+    assert out[45, 45] == HOLE_PLATE  # disk centre, in trimmed coords

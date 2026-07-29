@@ -1,9 +1,21 @@
 """Deterministic label-grid cleanup (FR-3..FR-7).
 
-Single entry point:
+Entry point:
+
+prepare(labels, palette, *, target_width_mm, smoothness, min_feature_mm,
+        clear_background, enclosed_background, paint_fills=()) -> PreparedArt
+
+which trims empty margins (only when clear_background is on) and then calls:
 
 run_cleanup(labels, palette, *, mm_per_px, smoothness, min_feature_mm,
-            clear_background, enclosed_background, paint_fills=()) -> CleanupResult
+            clear_background, enclosed_background, paint_fills=(),
+            background_labels=None) -> CleanupResult
+
+Trimming crops the quantized grid to the artwork's bounding box, so
+target_width_mm sizes the artwork rather than the source image and the printed
+sign no longer shrinks in proportion to whatever margin the upload happened to
+have. It runs before cleanup because every step below scales by mm_per_px,
+which the trimmed width defines.
 
 Fixed processing order (from the design doc):
 1. Smoothness: mode filtering on the label grid, kernel size scaled by
@@ -13,6 +25,8 @@ Fixed processing order (from the design doc):
 3. Background clear (if clear_background): sample the four corner labels;
    flood-fill every same-label region 4-connected to any corner -> TRANSPARENT.
    Originally-transparent pixels also count as corner-reachable background.
+   On a trimmed grid the corners hold artwork, so `prepare` passes the
+   background labels it detected pre-trim and the flood seeds from the border.
 4. Enclosed background resolution (only when clear_background).
 5. Paint-bucket fills (optional): each op flood-fills the single 4-connected
    component under a click to a chosen palette color, or erases it to
@@ -44,7 +58,9 @@ from app.core.types import (
     CleanupResult,
     HOLE_PLATE,
     Labels,
+    PreparedArt,
     TRANSPARENT,
+    TrimBox,
     hex_to_rgb,  # noqa: F401  (kept for parity; unused directly)
 )
 
@@ -98,21 +114,40 @@ def _remove_islands(labels: Labels, min_area_px: float) -> Labels:
     return out
 
 
-def _background_clear(labels: Labels) -> tuple[Labels, set[int]]:
+def _background_clear(
+    labels: Labels, background_labels: set[int] | None = None
+) -> tuple[Labels, set[int]]:
     """Flood TRANSPARENT from the four corners over cells that are either
     already TRANSPARENT or hold a corner label. Returns cleared grid and the
-    set of palette labels sampled at the corners (the "background" colors)."""
+    set of palette labels sampled at the corners (the "background" colors).
+
+    ``background_labels`` overrides corner sampling. Trimmed grids have artwork
+    touching their corners, so the caller passes the set detected before the
+    trim rather than letting this re-sample and clear the art itself.
+    """
     h, w = labels.shape
     corners = [(0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)]
-    corner_labels = {int(labels[r, c]) for (r, c) in corners}
-    palette_bg = {v for v in corner_labels if v >= 0}
+    if background_labels is None:
+        corner_labels = {int(labels[r, c]) for (r, c) in corners}
+        palette_bg = {v for v in corner_labels if v >= 0}
+    else:
+        palette_bg = {v for v in background_labels if v >= 0}
 
     passable = (labels == TRANSPARENT)
     for v in palette_bg:
         passable |= (labels == v)
 
     comp = cc_label(passable, background=0, connectivity=1)
-    seed_ids = {int(comp[r, c]) for (r, c) in corners if passable[r, c]}
+    if background_labels is None:
+        seed_ids = {int(comp[r, c]) for (r, c) in corners if passable[r, c]}
+    else:
+        # A trimmed grid's corners are artwork, so seed from the whole border
+        # ring. Only background-colored cells are passable, so widening the
+        # seeds cannot reach the art.
+        ring = np.zeros(labels.shape, dtype=bool)
+        ring[0, :] = ring[-1, :] = True
+        ring[:, 0] = ring[:, -1] = True
+        seed_ids = set(np.unique(comp[ring & passable]).tolist())
     seed_ids.discard(0)
     if seed_ids:
         reached = np.isin(comp, list(seed_ids))
@@ -202,6 +237,7 @@ def run_cleanup(
     clear_background: bool,
     enclosed_background: str,
     paint_fills: Sequence[tuple[int, int, str | None]] | None = None,
+    background_labels: set[int] | None = None,
 ) -> CleanupResult:
     n = len(palette)
     labels = np.asarray(labels, dtype=np.int16).copy()
@@ -218,7 +254,7 @@ def run_cleanup(
 
     if clear_background:
         # 3. Corner-connected background clear.
-        labels, palette_bg = _background_clear(labels)
+        labels, palette_bg = _background_clear(labels, background_labels)
 
         # 4. Enclosed background: remaining pixels still holding a corner
         #    (background) palette label are enclosed regions.
@@ -264,6 +300,92 @@ def run_cleanup(
         islands=islands,
         coverage=coverage,
     )
+
+
+def art_trim_box(
+    labels: Labels, *, min_area_px: float
+) -> tuple[TrimBox, set[int]] | None:
+    """Tightest box around the artwork that would survive a background clear.
+
+    Runs the background clear on the *quantized* grid — before smoothing and
+    island removal — because the caller needs the trimmed width to derive
+    mm_per_px, which those steps already consume. Components smaller than
+    ``min_area_px`` are ignored so a stray speck in the margin cannot inflate
+    the box; island removal would have deleted them anyway.
+
+    Returns the box and the palette labels detected as background, or None when
+    no artwork survives (e.g. a full-bleed image whose corners are art).
+    """
+    cleared, palette_bg = _background_clear(labels)
+    art = cleared != TRANSPARENT
+    if not art.any():
+        return None
+
+    if min_area_px > 1:
+        cc = cc_label(art, background=0, connectivity=2)
+        areas = np.bincount(cc.ravel())
+        small = np.nonzero(areas < min_area_px)[0]
+        art &= ~np.isin(cc, small[small != 0])
+        if not art.any():
+            return None
+
+    rows = np.nonzero(art.any(axis=1))[0]
+    cols = np.nonzero(art.any(axis=0))[0]
+    box = TrimBox(
+        top=int(rows[0]),
+        left=int(cols[0]),
+        bottom=int(rows[-1]) + 1,
+        right=int(cols[-1]) + 1,
+    )
+    return box, palette_bg
+
+
+def prepare(
+    labels: Labels,
+    palette: list[str],
+    *,
+    target_width_mm: float,
+    smoothness: int,
+    min_feature_mm: float,
+    clear_background: bool,
+    enclosed_background: str,
+    paint_fills: Sequence[tuple[int, int, str | None]] | None = None,
+) -> PreparedArt:
+    """Trim empty margins, then clean up — the whole quantized-grid stage.
+
+    When ``clear_background`` is on, the artwork is trimmed to its bounding box
+    and ``target_width_mm`` becomes the width of the *artwork* rather than of
+    the source image, so margins no longer shrink the printed sign. The trim
+    runs before cleanup so every mm-scaled parameter (smoothing radius, min
+    feature, thin scan) and the preview PNG share one scale.
+    """
+    mm_per_px = target_width_mm / int(labels.shape[1])
+    trim: TrimBox | None = None
+    background_labels: set[int] | None = None
+
+    if clear_background:
+        found = art_trim_box(labels, min_area_px=(min_feature_mm / mm_per_px) ** 2)
+        if found is not None:
+            box, background_labels = found
+            if box.shape != labels.shape:
+                trim = box
+                labels = labels[box.top : box.bottom, box.left : box.right]
+                mm_per_px = target_width_mm / box.width
+            else:
+                background_labels = None  # nothing trimmed; corner sampling is fine
+
+    result = run_cleanup(
+        labels,
+        palette,
+        mm_per_px=mm_per_px,
+        smoothness=smoothness,
+        min_feature_mm=min_feature_mm,
+        clear_background=clear_background,
+        enclosed_background=enclosed_background,
+        paint_fills=paint_fills,
+        background_labels=background_labels,
+    )
+    return PreparedArt(result=result, mm_per_px=mm_per_px, trim=trim)
 
 
 def color_perimeters(labels: Labels, palette: list[str]) -> dict[str, float]:

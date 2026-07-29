@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>3dSignMeUp</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='6' width='20' height='20' rx='4' transform='rotate(45 16 16)' fill='%235b8cff'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="/static/logo.png" />
+  <link rel="stylesheet" href="/static/styles.css?v=__ASSET_V__" />
   <script type="importmap">
     {
       "imports": {
@@ -19,8 +19,7 @@
   <div class="app">
     <header class="topbar">
       <div class="brand">
-        <span class="logo">◆</span>
-        <span class="brand-name">3dSignMeUp</span>
+        <img class="brand-logo" src="/static/logo.png" alt="3dSignMeUp" />
       </div>
       <nav class="stepper" id="stepper" aria-label="Progress">
         <button class="step" data-step="1" type="button"><span class="step-num">1</span><span class="step-label">Upload</span></button>
@@ -43,7 +42,13 @@
           <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload image">
             <input type="file" id="file-input" accept="image/png,image/jpeg,image/webp,image/bmp,image/gif" hidden />
             <div class="dropzone-empty" id="dropzone-empty">
-              <div class="dz-icon">⬆</div>
+              <div class="dz-icon">
+                <svg viewBox="0 0 24 24" width="56" height="56" aria-hidden="true">
+                  <path d="M12 16.5V4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                  <path d="M7.5 9 12 4.5 16.5 9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M4 15v3.5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+                </svg>
+              </div>
               <div class="dz-title">Drag &amp; drop your image</div>
               <div class="dz-sub">or <span class="link">browse files</span></div>
             </div>
@@ -51,6 +56,16 @@
               <img id="upload-thumb" alt="Uploaded preview" />
               <div class="upload-meta" id="upload-meta"></div>
             </div>
+          </div>
+
+          <div class="demo-row">
+            <button class="demo-card" id="demo-load" type="button">
+              <img class="demo-thumb checker" src="/static/logo.png" alt="" />
+              <span class="demo-text">
+                <span class="demo-title">Try the demo</span>
+                <span class="demo-sub">Load the 3dSignMeUp logo — no file needed</span>
+              </span>
+            </button>
           </div>
 
           <div class="actions">
@@ -70,14 +85,14 @@
             <div class="controls" id="clean-controls">
               <div class="field">
                 <label for="target-width">Sign width (mm)</label>
-                <input type="number" id="target-width" min="1" max="1000" step="1" value="120" />
+                <input type="number" id="target-width" min="1" max="1000" step="1" value="160" />
               </div>
 
               <div class="field">
                 <label>Number of colors</label>
                 <div class="stepper-input">
                   <button type="button" class="step-btn" id="ncolors-dec" aria-label="Fewer colors">−</button>
-                  <span class="stepper-value" id="ncolors-value">3</span>
+                  <span class="stepper-value" id="ncolors-value">5</span>
                   <button type="button" class="step-btn" id="ncolors-inc" aria-label="More colors">+</button>
                 </div>
               </div>
@@ -262,7 +277,7 @@
               <div class="ev-block">
                 <div class="ev-label">Filament by height</div>
                 <div class="fbar-headline" id="fbar-headline"></div>
-                <div class="fbar-note amber-note" id="fbar-note" hidden></div>
+                <div class="fbar-note warn-note" id="fbar-note" hidden></div>
                 <div class="fbar-wrap">
                   <div class="fbar" id="fbar"></div>
                   <div class="fbar-scale" id="fbar-scale"></div>
@@ -323,6 +338,6 @@
 
   <div class="toast-stack" id="toast-stack"></div>
 
-  <script type="module" src="/static/app.js"></script>
+  <script type="module" src="/static/app.js?v=__ASSET_V__"></script>
 </body>
 </html>
