@@ -1422,6 +1422,13 @@ function loadViewer(glbUrl) {
       controls.target.copy(center);
       controls.update();
 
+      viewer.fitDistance = camera.position.distanceTo(controls.target);
+      controls.minDistance = viewer.fitDistance / 8;
+      controls.maxDistance = viewer.fitDistance * 4;
+      viewerZoomControls.update(100);
+      controls.addEventListener("change", () => {
+        viewerZoomControls.update(viewer.fitDistance / camera.position.distanceTo(controls.target) * 100);
+      });
       loading.hidden = true;
     },
     undefined,
@@ -1487,4 +1494,77 @@ function restart() {
 // ============================================================
 // Boot
 // ============================================================
+let viewerZoomControls;
+initImageZoom($("#preview-stage"), $("#preview-img"));
+initImageZoom($("#extrude-preview-img").parentElement, $("#extrude-preview-img"));
+initViewerZoom();
 goToStep(1);
+
+
+function createZoomControls(label, min, max, onChange) {
+  const bar = document.createElement("div");
+  bar.className = "zoom-controls";
+  bar.setAttribute("role", "group");
+  bar.setAttribute("aria-label", `${label} zoom controls`);
+  bar.innerHTML = `
+    <button type="button" aria-label="Zoom out" title="Zoom out">−</button>
+    <input type="range" min="${min}" max="${max}" value="100" step="1" aria-label="${label} zoom" />
+    <button type="button" aria-label="Zoom in" title="Zoom in">+</button>
+    <output>100%</output>
+    <button type="button" title="Reset zoom">Reset</button>`;
+  const slider = bar.querySelector("input");
+  const output = bar.querySelector("output");
+  const buttons = bar.querySelectorAll("button");
+  const update = (value) => {
+    slider.value = String(Math.max(min, Math.min(max, value)));
+    output.value = `${Math.round(Number(slider.value))}%`;
+    buttons[0].disabled = Number(slider.value) <= min;
+    buttons[1].disabled = Number(slider.value) >= max;
+  };
+  const change = (value) => { update(value); onChange(Number(slider.value)); };
+  slider.addEventListener("input", () => change(Number(slider.value)));
+  buttons[0].addEventListener("click", () => change(Number(slider.value) / 1.25));
+  buttons[1].addEventListener("click", () => change(Number(slider.value) * 1.25));
+  buttons[2].addEventListener("click", () => change(100));
+  return { bar, update };
+}
+
+function initImageZoom(stage, img) {
+  let zoom = 100;
+  const content = document.createElement("div");
+  content.className = "zoom-image-content";
+  content.appendChild(img);
+  const overlay = stage.querySelector(".overlay");
+  if (overlay) content.appendChild(overlay);
+  stage.appendChild(content);
+  stage.classList.add("zoom-image-stage");
+  const layout = () => {
+    if (!img.naturalWidth || img.hidden || !stage.clientWidth) return;
+    const scale = Math.min(stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight);
+    content.style.width = `${img.naturalWidth * scale * zoom / 100}px`;
+    content.style.height = `${img.naturalHeight * scale * zoom / 100}px`;
+  };
+  const controls = createZoomControls(img.alt, 50, 800, (value) => {
+    const centerX = (stage.scrollLeft + stage.clientWidth / 2) / (content.offsetWidth || 1);
+    const centerY = (stage.scrollTop + stage.clientHeight / 2) / (content.offsetHeight || 1);
+    zoom = value;
+    layout();
+    stage.scrollLeft = centerX * content.offsetWidth - stage.clientWidth / 2;
+    stage.scrollTop = centerY * content.offsetHeight - stage.clientHeight / 2;
+  });
+  stage.before(controls.bar);
+  img.addEventListener("load", layout);
+  new ResizeObserver(layout).observe(stage);
+}
+
+function initViewerZoom() {
+  const controls = createZoomControls("3D view", 25, 800, (value) => {
+    if (!viewer?.fitDistance) return;
+    const offset = viewer.camera.position.clone().sub(viewer.controls.target);
+    offset.setLength(viewer.fitDistance * 100 / value);
+    viewer.camera.position.copy(viewer.controls.target).add(offset);
+    viewer.controls.update();
+  });
+  $("#viewer").appendChild(controls.bar);
+  viewerZoomControls = controls;
+}
